@@ -1,4 +1,4 @@
-# Registered Backlog Items
+# Digital Item Tracking
 
 Single-user backlog tracker for anime, games, and adjacent media built with Next.js 16 App Router, Drizzle, Better Auth, SQLite, local media storage, Steam sync, and MyAnimeList sync.
 
@@ -47,6 +47,8 @@ pnpm db:bootstrap # delete and recreate DATA_DIR/app.db; stop the server first
 pnpm db:generate   # generate SQL from the Drizzle schema
 pnpm db:migrate    # apply migrations to DATA_DIR/app.db
 pnpm db:backup     # snapshot app.db plus media into DATA_DIR/backups
+pnpm db:backfill:anime-nsfw # mark ANIME nodes NSFW when a stored genre is in NSFW_GENRES
+pnpm db:backfill:steam-nsfw # reconcile NSFW from stored Steam payloads
 pnpm test          # run targeted Vitest coverage
 pnpm lint          # ESLint
 pnpm typecheck     # TypeScript
@@ -71,6 +73,8 @@ pnpm build         # production build
 - Register the callback URL shown in `.env.example` with MAL.
 - Use **Connect MAL** from **Settings → Integrations**.
 - Tokens are stored encrypted with `APP_ENCRYPTION_KEY`.
+- Anime is flagged NSFW when MAL's `nsfw` field is non-white or any genre is in
+  `NSFW_GENRES` (comma-separated; empty disables genre-based flagging).
 
 ## Deployment
 
@@ -81,8 +85,8 @@ This app assumes a long-running Node.js process with a persistent writable volum
 Build and run with a mounted data volume:
 
 ```bash
-docker build -t registered-backlog-items .
-docker run   -p 3000:3000   -e APP_ORIGIN=http://localhost:3000   -e BETTER_AUTH_SECRET=change-me   -e APP_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef   -e STEAM_API_KEY=optional   -e MAL_CLIENT_ID=optional   -e MAL_CLIENT_SECRET=optional   -v "$PWD/.data:/data"   registered-backlog-items
+docker build -t digital-item-tracking .
+docker run   -p 3000:3000   -e APP_ORIGIN=http://localhost:3000   -e BETTER_AUTH_SECRET=change-me   -e APP_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef   -e STEAM_API_KEY=optional   -e MAL_CLIENT_ID=optional   -e MAL_CLIENT_SECRET=optional   -v "$PWD/.data:/data"   digital-item-tracking
 ```
 
 The container entrypoint runs `pnpm db:migrate` before starting the standalone server.

@@ -8,7 +8,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 <!-- END:nextjs-agent-rules -->
 
-# Registered Backlog Items
+# Digital Item Tracking
 
 Single-user backlog tracker (anime/games/media): Next.js 16 App Router monolith, Drizzle + better-sqlite3, Better Auth, local media storage, Steam/MAL sync. Deeper detail lives in `.github/copilot-instructions.md`.
 
@@ -21,12 +21,15 @@ Use pnpm (pinned `pnpm@11.5.0`). Verify with all of `pnpm lint`, `pnpm typecheck
 - Schema changes: edit `src/lib/db/schema.ts`, then `pnpm db:generate` then `pnpm db:migrate`. Commit both the SQL in `drizzle/` and the `drizzle/meta` snapshot.
 - `pnpm db:bootstrap` DELETES `DATA_DIR/app.db` — stop the dev server first.
 - `pnpm db:backup` snapshots `app.db` and media together (restores need both).
+- `pnpm db:backfill:anime-nsfw` marks ANIME nodes NSFW when a stored genre is in `NSFW_GENRES`.
+- `pnpm db:backfill:steam-nsfw` reconciles NSFW from stored Steam payloads via `isSteamNsfw`.
 
 ## Env & data
 
 - Config is centrally parsed/cached in `src/lib/env.ts` (zod). Read via `getEnv()`, not `process.env` (direct reads are only runtime/NODE_ENV checks). After mutating env in tests, call `resetEnvCache()`.
 - Dev/test fall back to default secrets; production startup throws without `BETTER_AUTH_SECRET` and a ≥32-byte `APP_ENCRYPTION_KEY`. `.env` is gitignored.
 - All mutable state lives under `DATA_DIR` (default `./.data`, gitignored): `app.db`, `media/{originals,thumbnails}`, `backups`. Tests use `.test-data`.
+- `NSFW_GENRES` (comma-separated, read via `getEnv().nsfwGenres`) marks MAL items NSFW at sync; empty disables genre-based flagging.
 
 ## Architecture
 

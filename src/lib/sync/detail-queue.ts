@@ -2,9 +2,11 @@ import "@/lib/server-only"
 
 import { and, asc, count, desc, eq, sql } from "drizzle-orm"
 
+import type { Provider } from "@/lib/constants"
 import { db } from "@/lib/db/client"
 import { detailSyncItems, detailSyncJobs, externalRefs, nodes } from "@/lib/db/schema"
 import { createId } from "@/lib/helpers"
+import { ProviderParseError } from "@/lib/providers/types"
 import { syncNodeDetails } from "@/lib/sync/item-details"
 
 const ACTIVE_JOB_KEY = "bulk-item-details"
@@ -50,13 +52,13 @@ function finishJobIfComplete(jobId: string) {
   return true
 }
 
-export function enqueueDetailSync() {
+export function enqueueDetailSync(provider?: Provider) {
   const activeJob = getActiveJob()
   if (activeJob) return { jobId: activeJob.id, created: false }
 
   const nodeIds = db.selectDistinct({ nodeId: externalRefs.nodeId })
     .from(externalRefs)
-    .where(eq(externalRefs.isActive, true))
+    .where(and(eq(externalRefs.isActive, true), provider ? eq(externalRefs.provider, provider) : undefined))
     .all()
   const now = new Date()
   const jobId = createId()
@@ -65,6 +67,7 @@ export function enqueueDetailSync() {
     tx.insert(detailSyncJobs)
       .values({
         id: jobId,
+        provider: provider ?? null,
         status: nodeIds.length ? "queued" : "success",
         activeKey: nodeIds.length ? ACTIVE_JOB_KEY : null,
         finishedAt: nodeIds.length ? null : now,
@@ -164,12 +167,13 @@ export async function processNextDetailSyncItem() {
   })
 
   try {
-    const result = await syncNodeDetails(item.nodeId)
+    const result = await syncNodeDetails(item.nodeId, activeJob.provider ?? undefined)
     const finishedAt = new Date()
     db.update(detailSyncItems)
       .set({
         status: "success",
         warningText: result.failures.length ? result.failures.join(" ") : null,
+        responseJson: result.responses.length ? JSON.stringify(result.responses) : null,
         finishedAt,
         updatedAt: finishedAt,
       })
@@ -181,6 +185,10 @@ export async function processNextDetailSyncItem() {
       .set({
         status: "failed",
         errorText: error instanceof Error ? error.message : String(error),
+        responseJson:
+          error instanceof ProviderParseError && error.response !== undefined
+            ? JSON.stringify(error.response)
+            : null,
         finishedAt,
         updatedAt: finishedAt,
       })
@@ -220,6 +228,7 @@ export function retryFailedDetailSync(jobId: string) {
         status: "pending",
         warningText: null,
         errorText: null,
+        responseJson: null,
         startedAt: null,
         finishedAt: null,
         updatedAt: now,
@@ -234,6 +243,49 @@ export function retryFailedDetailSync(jobId: string) {
         updatedAt: now,
       })
       .where(eq(detailSyncJobs.id, jobId))
+      .run()
+  })
+}
+
+export function retryDetailSyncItem(itemId: string) {
+  if (getActiveJob()) {
+    throw new Error("A detail sync is already running.")
+  }
+
+  const item = db.query.detailSyncItems.findFirst({ where: eq(detailSyncItems.id, itemId) }).sync()
+  if (!item || item.status !== "failed") {
+    throw new Error("The selected item is not a failed detail sync item.")
+  }
+
+  const job = db.select()
+    .from(detailSyncJobs)
+    .where(and(eq(detailSyncJobs.id, item.jobId), eq(detailSyncJobs.status, "partial")))
+    .get()
+  if (!job) {
+    throw new Error("The selected item belongs to a completed detail sync.")
+  }
+
+  const now = new Date()
+  db.transaction((tx) => {
+    tx.update(detailSyncItems)
+      .set({
+        status: "pending",
+        errorText: null,
+        responseJson: null,
+        startedAt: null,
+        finishedAt: null,
+        updatedAt: now,
+      })
+      .where(eq(detailSyncItems.id, itemId))
+      .run()
+    tx.update(detailSyncJobs)
+      .set({
+        status: "queued",
+        activeKey: ACTIVE_JOB_KEY,
+        finishedAt: null,
+        updatedAt: now,
+      })
+      .where(eq(detailSyncJobs.id, item.jobId))
       .run()
   })
 }
@@ -257,15 +309,16 @@ export function getDetailSyncProgress() {
     .get()
 
   const errors = db.select({
+    id: detailSyncItems.id,
     nodeId: detailSyncItems.nodeId,
     displayName: nodes.displayName,
     message: detailSyncItems.errorText,
+    responseJson: detailSyncItems.responseJson,
   })
     .from(detailSyncItems)
     .innerJoin(nodes, eq(nodes.id, detailSyncItems.nodeId))
     .where(and(eq(detailSyncItems.jobId, job.id), eq(detailSyncItems.status, "failed")))
     .orderBy(asc(detailSyncItems.finishedAt))
-    .limit(5)
     .all()
 
   const warnings = db.select({

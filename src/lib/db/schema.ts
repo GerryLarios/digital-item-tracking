@@ -2,7 +2,9 @@ import { relations, sql } from "drizzle-orm"
 import {
   index,
   integer,
+  real,
   sqliteTable,
+  sqliteView,
   text,
   uniqueIndex,
 } from "drizzle-orm/sqlite-core"
@@ -18,6 +20,7 @@ import {
   PROVIDERS,
   STORAGE_MEDIA,
   SYNC_RUN_STATUSES,
+  SYNC_RUN_ITEM_STATUSES,
   SYNC_TRIGGERS,
 } from "@/lib/constants"
 
@@ -305,10 +308,36 @@ export const syncLeases = sqliteTable("sync_leases", {
   updatedAt: timestampMs("updated_at").notNull().default(nowSql),
 })
 
+export const syncRunItems = sqliteTable(
+  "sync_run_items",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => syncRuns.id, { onDelete: "cascade" }),
+    nodeId: text("node_id").references(() => nodes.id, { onDelete: "set null" }),
+    externalId: text("external_id").notNull(),
+    title: text("title").notNull(),
+    status: text("status", { enum: SYNC_RUN_ITEM_STATUSES }).notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    errorText: text("error_text"),
+    payloadJson: text("payload_json").notNull().default(jsonObjectDefault),
+    startedAt: timestampMs("started_at"),
+    finishedAt: timestampMs("finished_at"),
+    createdAt: timestampMs("created_at").notNull().default(nowSql),
+    updatedAt: timestampMs("updated_at").notNull().default(nowSql),
+  },
+  (table) => [
+    uniqueIndex("sync_run_items_run_external_unique").on(table.runId, table.externalId),
+    index("sync_run_items_claim_idx").on(table.runId, table.status, table.createdAt),
+  ],
+)
+
 export const detailSyncJobs = sqliteTable(
   "detail_sync_jobs",
   {
     id: text("id").primaryKey(),
+    provider: text("provider", { enum: PROVIDERS }),
     status: text("status", { enum: DETAIL_SYNC_JOB_STATUSES }).notNull().default("queued"),
     activeKey: text("active_key").unique(),
     startedAt: timestampMs("started_at"),
@@ -333,6 +362,7 @@ export const detailSyncItems = sqliteTable(
     attempts: integer("attempts").notNull().default(0),
     warningText: text("warning_text"),
     errorText: text("error_text"),
+    responseJson: text("response_json"),
     startedAt: timestampMs("started_at"),
     finishedAt: timestampMs("finished_at"),
     createdAt: timestampMs("created_at").notNull().default(nowSql),
@@ -349,6 +379,94 @@ export const appSettings = sqliteTable("app_settings", {
   value: text("value").notNull(),
   updatedAt: timestampMs("updated_at").notNull().default(nowSql),
 })
+
+export const libraryNodeSummary = sqliteView(
+  "library_node_summary",
+  {
+    id: text("id").notNull(),
+    mediaType: text("media_type").notNull(),
+    displayName: text("display_name").notNull(),
+    description: text("description"),
+    status: text("status").notNull(),
+    releaseYear: integer("release_year"),
+    nsfw: integer("nsfw", { mode: "boolean" }).notNull(),
+    hidden: integer("hidden", { mode: "boolean" }).notNull(),
+    createdAt: timestampMs("created_at").notNull(),
+    updatedAt: timestampMs("updated_at").notNull(),
+    providersJson: text("providers_json"),
+    mediumsJson: text("mediums_json"),
+    isWishlisted: integer("is_wishlisted", { mode: "boolean" }).notNull(),
+    mainImageId: text("main_image_id"),
+    thumbnailImageId: text("thumbnail_image_id"),
+    rating: real("rating"),
+  },
+).as(
+  sql`
+    select
+      n."id",
+      n."media_type",
+      n."display_name",
+      n."description",
+      n."status",
+      n."release_year",
+      n."nsfw",
+      n."hidden",
+      n."created_at",
+      n."updated_at",
+      (
+        select json_group_array(provider)
+        from (
+          select distinct r."provider" as provider
+          from "external_refs" as r
+          where r."node_id" = n."id" and r."is_active" = 1
+          order by provider
+        )
+      ) as "providers_json",
+      (
+        select json_group_array(medium)
+        from (
+          select distinct s."medium" as medium
+          from "storage_locations" as s
+          where s."node_id" = n."id" and s."is_active" = 1
+          order by medium
+        )
+      ) as "mediums_json",
+      exists (
+        select 1
+        from "external_refs" as r, json_each(r."list_memberships") as membership
+        where r."node_id" = n."id" and r."is_active" = 1 and membership."value" = 'wishlist'
+      ) as "is_wishlisted",
+      (
+        select i."id"
+        from "images" as i
+        where i."node_id" = n."id" and i."role" = 'main'
+        order by i."sort_order" asc, i."id" asc
+        limit 1
+      ) as "main_image_id",
+      (
+        select i."id"
+        from "images" as i
+        where i."node_id" = n."id" and i."role" = 'thumbnail'
+        order by i."sort_order" asc, i."id" asc
+        limit 1
+      ) as "thumbnail_image_id",
+      coalesce(
+        (
+          select cast(a."value" as real)
+          from "node_attributes" as a
+          where a."node_id" = n."id" and a."key" = 'score' and a."source_provider" = 'mal'
+          limit 1
+        ),
+        (
+          select cast(a."value" as real) / 10.0
+          from "node_attributes" as a
+          where a."node_id" = n."id" and a."key" = 'metacriticScore' and a."source_provider" = 'steam'
+          limit 1
+        )
+      ) as "rating"
+    from "nodes" as n
+  `,
+)
 
 export const usersRelations = relations(users, ({ many }) => ({
   sessions: many(sessions),
@@ -406,4 +524,9 @@ export const detailSyncItemsRelations = relations(detailSyncItems, ({ one }) => 
     references: [detailSyncJobs.id],
   }),
   node: one(nodes, { fields: [detailSyncItems.nodeId], references: [nodes.id] }),
+}))
+
+export const syncRunItemsRelations = relations(syncRunItems, ({ one }) => ({
+  run: one(syncRuns, { fields: [syncRunItems.runId], references: [syncRuns.id] }),
+  node: one(nodes, { fields: [syncRunItems.nodeId], references: [nodes.id] }),
 }))

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest"
 import { db } from "@/lib/db/client"
 import { detailSyncItems, detailSyncJobs, externalRefs, nodes } from "@/lib/db/schema"
 import { createId } from "@/lib/helpers"
+import { ProviderParseError } from "@/lib/providers/types"
 
 const syncNodeDetails = vi.hoisted(() => vi.fn())
 
@@ -14,16 +15,17 @@ const {
   getDetailSyncProgress,
   processNextDetailSyncItem,
   recoverInterruptedDetailSync,
+  retryDetailSyncItem,
   retryFailedDetailSync,
 } = await import("@/lib/sync/detail-queue")
 
-function insertProviderNode(externalId: string, isActive = true) {
+function insertProviderNode(externalId: string, isActive = true, provider: "steam" | "mal" = "steam") {
   const now = new Date()
   const nodeId = createId()
   db.insert(nodes)
     .values({
       id: nodeId,
-      mediaType: "GAME",
+      mediaType: provider === "mal" ? "ANIME" : "GAME",
       displayName: `Game ${externalId}`,
       createdAt: now,
       updatedAt: now,
@@ -33,7 +35,7 @@ function insertProviderNode(externalId: string, isActive = true) {
     .values({
       id: createId(),
       nodeId,
-      provider: "steam",
+      provider,
       externalId,
       isActive,
       createdAt: now,
@@ -74,15 +76,15 @@ describe("bulk item detail queue", () => {
     enqueueDetailSync()
     syncNodeDetails.mockImplementation(async (nodeId: string) => {
       if (nodeId === failedNode) throw new Error("Steam unavailable")
-      return { updated: ["steam"], failures: ["MAL unavailable"] }
+      return { updated: ["steam"], failures: ["MAL unavailable"], responses: [] }
     })
 
     await processNextDetailSyncItem()
     await processNextDetailSyncItem()
 
     const progress = getDetailSyncProgress()
-    expect(syncNodeDetails).toHaveBeenCalledWith(successfulNode)
-    expect(syncNodeDetails).toHaveBeenCalledWith(failedNode)
+    expect(syncNodeDetails).toHaveBeenCalledWith(successfulNode, undefined)
+    expect(syncNodeDetails).toHaveBeenCalledWith(failedNode, undefined)
     expect(progress?.status).toBe("partial")
     expect(progress?.counts).toMatchObject({
       total: 2,
@@ -92,6 +94,40 @@ describe("bulk item detail queue", () => {
     })
     expect(progress?.errors[0].message).toBe("Steam unavailable")
     expect(progress?.warnings[0].message).toBe("MAL unavailable")
+  })
+
+  it("stores the raw provider response for a failed item", async () => {
+    insertProviderNode("700")
+    enqueueDetailSync()
+    const rawResponse = {
+      700: {
+        success: true,
+        data: { name: "Broken", content_descriptors: { ids: "oops" } },
+      },
+    }
+    syncNodeDetails.mockRejectedValueOnce(
+      new ProviderParseError("Invalid input", rawResponse),
+    )
+
+    await processNextDetailSyncItem()
+
+    const progress = getDetailSyncProgress()
+    expect(progress?.status).toBe("partial")
+    expect(progress?.errors[0].message).toBe("Invalid input")
+    expect(progress?.errors[0].responseJson).toBe(JSON.stringify(rawResponse))
+  })
+
+  it("scopes the queue to a single provider when requested", async () => {
+    insertProviderNode("600")
+    const malNode = insertProviderNode("601", true, "mal")
+    enqueueDetailSync("mal")
+    syncNodeDetails.mockResolvedValueOnce({ updated: ["mal"], failures: [], responses: [] })
+
+    await processNextDetailSyncItem()
+
+    expect(getDetailSyncProgress()?.counts.total).toBe(1)
+    expect(getDetailSyncProgress()?.provider).toBe("mal")
+    expect(syncNodeDetails).toHaveBeenCalledWith(malNode, "mal")
   })
 
   it("recovers an interrupted item after restart", () => {
@@ -130,7 +166,7 @@ describe("bulk item detail queue", () => {
     expect(queued?.status).toBe("queued")
     expect(queued?.counts.pending).toBe(1)
 
-    syncNodeDetails.mockResolvedValueOnce({ updated: ["steam"], failures: [] })
+    syncNodeDetails.mockResolvedValueOnce({ updated: ["steam"], failures: [], responses: [] })
     await processNextDetailSyncItem()
     const complete = getDetailSyncProgress()
     expect(complete?.status).toBe("success")
@@ -138,5 +174,32 @@ describe("bulk item detail queue", () => {
     expect(db.query.detailSyncItems.findFirst({
       where: eq(detailSyncItems.jobId, jobId),
     }).sync()?.attempts).toBe(2)
+  })
+
+  it("re-syncs a single failed item and leaves the rest untouched", async () => {
+    const failedNode = insertProviderNode("500")
+    insertProviderNode("501")
+    enqueueDetailSync()
+    syncNodeDetails.mockImplementation(async (nodeId: string) => {
+      if (nodeId === failedNode) throw new Error("Temporary failure")
+      return { updated: ["steam"], failures: [], responses: [] }
+    })
+    await processNextDetailSyncItem()
+    await processNextDetailSyncItem()
+
+    const failedItem = getDetailSyncProgress()?.errors[0]
+    expect(failedItem?.message).toBe("Temporary failure")
+
+    retryDetailSyncItem(failedItem!.id)
+    const requeued = getDetailSyncProgress()
+    expect(requeued?.status).toBe("queued")
+    expect(requeued?.counts.pending).toBe(1)
+    expect(requeued?.counts.succeeded).toBe(1)
+
+    syncNodeDetails.mockResolvedValueOnce({ updated: ["steam"], failures: [], responses: [] })
+    await processNextDetailSyncItem()
+    const complete = getDetailSyncProgress()
+    expect(complete?.status).toBe("success")
+    expect(complete?.counts.succeeded).toBe(2)
   })
 })

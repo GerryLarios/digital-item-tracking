@@ -4,7 +4,15 @@ import Link from "next/link"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { useEffect, useMemo, useState } from "react"
 
-import { MEDIA_TYPES, NODE_STATUSES, PROVIDERS, STORAGE_MEDIA } from "@/lib/constants"
+import {
+  DEFAULT_LIBRARY_SORT,
+  LIBRARY_SORT_LABELS,
+  LIBRARY_SORT_OPTIONS,
+  MEDIA_TYPES,
+  NODE_STATUSES,
+  PROVIDERS,
+  STORAGE_MEDIA,
+} from "@/lib/constants"
 import { buttonVariants } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
@@ -78,7 +86,7 @@ export function LibraryFilterBar({
           </Link>
         </div>
       </div>
-      <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-7">
+      <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-8">
         <div className="xl:col-span-2">
           <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title or synopsis" />
         </div>
@@ -166,6 +174,22 @@ export function LibraryFilterBar({
             </option>
           ))}
         </select>
+        <select
+          className="h-8 rounded-lg border border-input bg-background px-2.5 text-sm"
+          defaultValue={searchParams.get("sort") ?? DEFAULT_LIBRARY_SORT}
+          onChange={(event) =>
+            applyParams((params) => {
+              if (event.target.value) params.set("sort", event.target.value)
+              else params.delete("sort")
+            })
+          }
+        >
+          {LIBRARY_SORT_OPTIONS.map((option) => (
+            <option key={option} value={option}>
+              {LIBRARY_SORT_LABELS[option]}
+            </option>
+          ))}
+        </select>
       </div>
       <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground">
         <label className="flex items-center gap-2">
@@ -193,6 +217,19 @@ export function LibraryFilterBar({
             }
           />
           Show NSFW items
+        </label>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            defaultChecked={searchParams.get("onlyNsfw") === "true"}
+            onChange={(event) =>
+              applyParams((params) => {
+                if (event.target.checked) params.set("onlyNsfw", "true")
+                else params.delete("onlyNsfw")
+              })
+            }
+          />
+          Only NSFW items
         </label>
       </div>
     </div>

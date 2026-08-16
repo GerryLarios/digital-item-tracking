@@ -3,6 +3,8 @@ import { z } from "zod"
 import {
   ATTRIBUTE_VALUE_TYPES,
   COLLECTION_MEMBERSHIPS,
+  DEFAULT_LIBRARY_SORT,
+  LIBRARY_SORT_OPTIONS,
   MEDIA_TYPES,
   NODE_STATUSES,
   PROVIDERS,
@@ -85,12 +87,17 @@ export const librarySearchSchema = z.object({
   collection: z.enum(COLLECTION_MEMBERSHIPS).optional(),
   medium: z.enum(STORAGE_MEDIA).optional(),
   view: z.enum(["grid", "list"]).default("grid"),
+  sort: z.enum(LIBRARY_SORT_OPTIONS).default(DEFAULT_LIBRARY_SORT),
   page: z.coerce.number().int().min(1).default(1),
   showHidden: z
     .union([z.string(), z.boolean(), z.undefined()])
     .transform((value) => value === true || value === "true" || value === "on")
     .default(false),
   showNsfw: z
+    .union([z.string(), z.boolean(), z.undefined()])
+    .transform((value) => value === true || value === "true" || value === "on")
+    .default(false),
+  onlyNsfw: z
     .union([z.string(), z.boolean(), z.undefined()])
     .transform((value) => value === true || value === "true" || value === "on")
     .default(false),

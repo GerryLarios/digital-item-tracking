@@ -26,6 +26,15 @@ function groupAttributes(attributes: Array<{ key: string; value: string }>) {
   return [...groups.entries()]
 }
 
+function formatAttributeKey(key: string) {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .split(" ")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ")
+}
+
 export async function generateMetadata({
   params,
 }: {
@@ -194,7 +203,7 @@ export default async function NodeDetailPage({
               {groupedAttributes.length ? (
                 groupedAttributes.map(([key, values]) => (
                   <div key={key} className="rounded-lg border p-3">
-                    <p className="font-medium">{key}</p>
+                    <p className="font-medium">{formatAttributeKey(key)}</p>
                     <p className="mt-1 text-muted-foreground">{values.join(", ")}</p>
                   </div>
                 ))

@@ -13,7 +13,9 @@
     "db:bootstrap": "tsx src/scripts/bootstrap.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/scripts/migrate.ts",
-    "db:backup": "tsx src/scripts/backup.ts"
+    "db:backup": "tsx src/scripts/backup.ts",
+    "db:backfill:anime-nsfw": "tsx src/scripts/backfill-anime-nsfw.ts",
+    "db:backfill:steam-nsfw": "tsx src/scripts/backfill-steam-nsfw.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

@@ -9,7 +9,7 @@ import { parseJson } from "@/lib/helpers"
 import { getSyncAccount } from "@/lib/integrations/service"
 import { fetchMalItemDetails } from "@/lib/providers/mal"
 import { fetchSteamItemDetails } from "@/lib/providers/steam"
-import type { RemoteCatalogItem } from "@/lib/providers/types"
+import { ProviderParseError, type RemoteCatalogItem } from "@/lib/providers/types"
 import { reconcileRemoteItem } from "@/lib/sync/service"
 
 async function fetchDetails(
@@ -29,14 +29,18 @@ async function fetchDetails(
   return fetchMalItemDetails(account, externalId, memberships)
 }
 
-export async function syncNodeDetails(nodeId: string) {
+export async function syncNodeDetails(nodeId: string, provider?: Provider) {
   const node = db.query.nodes.findFirst({ where: eq(nodes.id, nodeId) }).sync()
   if (!node) {
     throw new Error("Item not found.")
   }
 
   const refs = db.query.externalRefs.findMany({
-    where: and(eq(externalRefs.nodeId, nodeId), eq(externalRefs.isActive, true)),
+    where: and(
+      eq(externalRefs.nodeId, nodeId),
+      eq(externalRefs.isActive, true),
+      provider ? eq(externalRefs.provider, provider) : undefined,
+    ),
   }).sync()
   if (!refs.length) {
     throw new Error("This item has no active provider references.")
@@ -44,6 +48,7 @@ export async function syncNodeDetails(nodeId: string) {
 
   const updated: Provider[] = []
   const failures: string[] = []
+  const responses: unknown[] = []
 
   for (const ref of refs) {
     try {
@@ -55,15 +60,22 @@ export async function syncNodeDetails(nodeId: string) {
       failures.push(
         `${ref.provider.toUpperCase()}: ${error instanceof Error ? error.message : String(error)}`,
       )
+      if (error instanceof ProviderParseError) {
+        responses.push(error.response)
+      }
     }
   }
 
   if (!updated.length) {
-    throw new Error(failures.join(" ") || "No provider details could be updated.")
+    throw new ProviderParseError(
+      failures.join(" ") || "No provider details could be updated.",
+      responses.length === 1 ? responses[0] : responses,
+    )
   }
 
   return {
     updated: [...new Set(updated)],
     failures,
+    responses,
   }
 }

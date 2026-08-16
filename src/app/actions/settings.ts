@@ -1,24 +1,36 @@
-"use server"
+"use server";
 
-import { redirect } from "next/navigation"
+import { redirect } from "next/navigation";
 
-import { getPrimaryUserId, requireSession } from "@/lib/auth"
-import { PROVIDERS } from "@/lib/constants"
-import { configureSteamAccount, disconnectProvider } from "@/lib/integrations/service"
-import { steamConfigSchema } from "@/lib/validation"
-import { enqueueDetailSync, retryFailedDetailSync } from "@/lib/sync/detail-queue"
-import { syncAllProviders, syncProvider } from "@/lib/sync/service"
+import { getPrimaryUserId, requireSession } from "@/lib/auth";
+import { PROVIDERS } from "@/lib/constants";
+import {
+  configureSteamAccount,
+  disconnectProvider,
+} from "@/lib/integrations/service";
+import {
+  enqueueDetailSync,
+  retryDetailSyncItem,
+  retryFailedDetailSync,
+} from "@/lib/sync/detail-queue";
+import {
+  enqueueAllProviderSyncs,
+  enqueueProviderSync,
+  retryProviderRunItem,
+} from "@/lib/sync/provider-run";
+import { clearCompletedSyncRuns } from "@/lib/sync/service";
+import { steamConfigSchema } from "@/lib/validation";
 
 export async function updateSteamSettingsAction(formData: FormData) {
-  await requireSession()
+  await requireSession();
 
   const parsed = steamConfigSchema.safeParse({
     steamId: formData.get("steamId"),
     wishlistShareUrl: formData.get("wishlistShareUrl"),
-  })
+  });
 
   if (!parsed.success) {
-    redirect("/settings/integrations?error=steam-config")
+    redirect("/settings/integrations?error=steam-config");
   }
 
   configureSteamAccount({
@@ -26,74 +38,144 @@ export async function updateSteamSettingsAction(formData: FormData) {
     wishlistShareUrl: parsed.data.wishlistShareUrl || undefined,
     enabled: true,
     userId: getPrimaryUserId(),
-  })
+  });
 
-  redirect("/settings/integrations?saved=steam")
+  redirect("/settings/integrations?saved=steam");
 }
 
 export async function disconnectProviderAction(formData: FormData) {
-  await requireSession()
+  await requireSession();
 
-  const provider = formData.get("provider")
+  const provider = formData.get("provider");
   if (typeof provider !== "string" || !PROVIDERS.includes(provider as never)) {
-    redirect("/settings/integrations")
+    redirect("/settings/integrations");
   }
 
-  disconnectProvider(provider as (typeof PROVIDERS)[number])
-  redirect(`/settings/integrations?disconnected=${provider}`)
+  disconnectProvider(provider as (typeof PROVIDERS)[number]);
+  redirect(`/settings/integrations?disconnected=${provider}`);
 }
 
 export async function runSyncAction(formData: FormData) {
-  await requireSession()
+  await requireSession();
 
-  const provider = formData.get("provider")
+  const provider = formData.get("provider");
 
   if (provider === "all") {
-    await syncAllProviders("manual")
-    redirect("/settings/integrations?synced=all")
+    enqueueAllProviderSyncs("manual");
+    redirect("/settings/integrations?synced=queued-all");
   }
 
   if (typeof provider !== "string" || !PROVIDERS.includes(provider as never)) {
-    redirect("/settings/integrations?error=sync-provider")
+    redirect("/settings/integrations?error=sync-provider");
   }
 
   try {
-    await syncProvider(provider as (typeof PROVIDERS)[number], "manual")
-    redirect(`/settings/integrations?synced=${provider}`)
+    enqueueProviderSync(provider as (typeof PROVIDERS)[number], "manual");
   } catch (error) {
-    const message = error instanceof Error ? encodeURIComponent(error.message) : "sync-error"
-    redirect(`/settings/integrations?error=${message}`)
+    const message =
+      error instanceof Error ? encodeURIComponent(error.message) : "sync-error";
+    redirect(`/settings/integrations?error=${message}`);
   }
+
+  redirect(`/settings/integrations?synced=queued-${provider}`);
 }
 
-export async function startDetailSyncAction() {
-  await requireSession()
+export async function startDetailSyncAction(formData: FormData) {
+  await requireSession();
 
-  let created: boolean
+  const rawProvider = formData.get("provider");
+  const provider =
+    typeof rawProvider === "string" &&
+    PROVIDERS.includes(rawProvider as never)
+      ? (rawProvider as (typeof PROVIDERS)[number])
+      : undefined;
+
+  let created: boolean;
   try {
-    created = enqueueDetailSync().created
+    created = enqueueDetailSync(provider).created;
   } catch (error) {
-    const message = error instanceof Error ? encodeURIComponent(error.message) : "detail-sync-error"
-    redirect(`/settings/integrations?error=${message}`)
+    const message =
+      error instanceof Error
+        ? encodeURIComponent(error.message)
+        : "detail-sync-error";
+    redirect(`/settings/integrations?error=${message}`);
   }
 
-  redirect(`/settings/integrations?details=${created ? "queued" : "active"}`)
+  redirect(`/settings/integrations?details=${created ? "queued" : "active"}`);
 }
 
 export async function retryDetailSyncAction(formData: FormData) {
-  await requireSession()
+  await requireSession();
 
-  const jobId = formData.get("jobId")
+  const jobId = formData.get("jobId");
   if (typeof jobId !== "string" || !jobId) {
-    redirect("/settings/integrations?error=Invalid%20detail%20sync%20job.")
+    redirect("/settings/integrations?error=Invalid%20detail%20sync%20job.");
   }
 
   try {
-    retryFailedDetailSync(jobId)
+    retryFailedDetailSync(jobId);
   } catch (error) {
-    const message = error instanceof Error ? encodeURIComponent(error.message) : "detail-sync-error"
-    redirect(`/settings/integrations?error=${message}`)
+    const message =
+      error instanceof Error
+        ? encodeURIComponent(error.message)
+        : "detail-sync-error";
+    redirect(`/settings/integrations?error=${message}`);
   }
 
-  redirect("/settings/integrations?details=retrying")
+  redirect("/settings/integrations?details=retrying");
+}
+
+export async function retryDetailSyncItemAction(formData: FormData) {
+  await requireSession();
+
+  const itemId = formData.get("itemId");
+  if (typeof itemId !== "string" || !itemId) {
+    redirect("/settings/integrations?error=Invalid%20detail%20sync%20item.");
+  }
+
+  try {
+    retryDetailSyncItem(itemId);
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? encodeURIComponent(error.message)
+        : "detail-sync-error";
+    redirect(`/settings/integrations?error=${message}`);
+  }
+
+  redirect("/settings/integrations?details=retrying");
+}
+
+export async function retryProviderRunItemAction(formData: FormData) {
+  await requireSession();
+
+  const runId = formData.get("runId");
+  const itemId = formData.get("itemId");
+  if (
+    typeof runId !== "string" ||
+    !runId ||
+    typeof itemId !== "string" ||
+    !itemId
+  ) {
+    redirect("/settings/integrations?error=Invalid%20sync%20item.");
+  }
+
+  try {
+    retryProviderRunItem(runId, itemId);
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? encodeURIComponent(error.message)
+        : "provider-sync-error";
+    redirect(`/settings/integrations?error=${message}`);
+  }
+
+  redirect("/settings/integrations?synced=retrying");
+}
+
+export async function clearSyncHistoryAction() {
+  await requireSession();
+
+  clearCompletedSyncRuns();
+  redirect("/settings/integrations?cleared=history");
 }

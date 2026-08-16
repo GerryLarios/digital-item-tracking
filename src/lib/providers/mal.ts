@@ -7,6 +7,7 @@ import type {
   RemoteAttribute,
   RemoteCatalogItem,
 } from "@/lib/providers/types"
+import { ProviderParseError } from "@/lib/providers/types"
 import { getEnv } from "@/lib/env"
 import { fetchJson, fetchWithTimeout } from "@/lib/http"
 import type { ParsedSyncAccount } from "@/lib/integrations/service"
@@ -295,6 +296,9 @@ function mapAnimeToItem({
 }): RemoteCatalogItem {
   const mainPicture = anime.main_picture as { medium?: string; large?: string } | undefined
   const genres = Array.isArray(anime.genres) ? anime.genres : []
+  const genreNames = genres
+    .map((genre) => (genre && typeof genre === "object" && "name" in genre ? String(genre.name) : null))
+    .filter((value): value is string => Boolean(value))
   const studios = Array.isArray(anime.studios) ? anime.studios : []
   const alternativeTitles =
     anime.alternative_titles && typeof anime.alternative_titles === "object"
@@ -316,7 +320,9 @@ function mapAnimeToItem({
       anime.start_season && typeof anime.start_season === "object" && "year" in anime.start_season
         ? Number((anime.start_season as { year?: number }).year)
         : null,
-    nsfw: typeof anime.nsfw === "string" ? anime.nsfw !== "white" : null,
+    nsfw:
+      (typeof anime.nsfw === "string" && anime.nsfw !== "white") ||
+      genreNames.some((genre) => getEnv().nsfwGenres.includes(genre)),
     memberships,
     externalUrl: `https://myanimelist.net/anime/${externalId}`,
     imageUrl: mainPicture?.large ?? mainPicture?.medium ?? null,
@@ -325,10 +331,7 @@ function mapAnimeToItem({
       mediaType: typeof anime.media_type === "string" ? anime.media_type : null,
     },
     attributes: [
-      ...genres
-        .map((genre) => (genre && typeof genre === "object" && "name" in genre ? String(genre.name) : null))
-        .filter((value): value is string => Boolean(value))
-        .map((value) => ({ key: "genre", value, valueType: "text" as const })),
+      ...genreNames.map((value) => ({ key: "genre", value, valueType: "text" as const })),
       ...studios
         .map((studio) => (studio && typeof studio === "object" && "name" in studio ? String(studio.name) : null))
         .filter((value): value is string => Boolean(value))
@@ -436,7 +439,15 @@ export async function fetchMalItemDetails(
       `anime/${externalId}`,
       { fields },
     )
-    const details = animeDetailsSchema.parse(rawResponse)
+    let details: z.infer<typeof animeDetailsSchema>
+    try {
+      details = animeDetailsSchema.parse(rawResponse)
+    } catch (error) {
+      throw new ProviderParseError(
+        error instanceof Error ? error.message : String(error),
+        rawResponse,
+      )
+    }
     const mapped = mapAnimeToItem({
       externalId,
       anime: details,

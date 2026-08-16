@@ -22,6 +22,34 @@
       "when": 1786805455903,
       "tag": "0002_real_doomsday",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1786816099734,
+      "tag": "0003_typical_toad",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1786824004653,
+      "tag": "0004_fantastic_zodiak",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1786828901334,
+      "tag": "0005_friendly_firedrake",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1786836244955,
+      "tag": "0006_tiny_redwing",
+      "breakpoints": true
     }
   ]
 }

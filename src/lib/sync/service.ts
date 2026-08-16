@@ -1,29 +1,21 @@
 import "@/lib/server-only"
 
-import { and, eq } from "drizzle-orm"
+import { and, asc, eq, ne } from "drizzle-orm"
 
-import type { EditableNodeField, Provider, SyncTrigger } from "@/lib/constants"
-import { PROVIDER_LABELS } from "@/lib/constants"
+import type { EditableNodeField } from "@/lib/constants"
 import { db } from "@/lib/db/client"
 import {
   externalRefs,
   nodeAttributes,
   nodes,
   storageLocations,
+  syncRunItems,
   syncRuns,
 } from "@/lib/db/schema"
 import { createId, parseJson, uniqueValues } from "@/lib/helpers"
-import {
-  getSyncAccount,
-  listSyncAccounts,
-  type ParsedSyncAccount,
-  upsertSyncAccount,
-} from "@/lib/integrations/service"
 import { hasLocalOverride } from "@/lib/library/service"
-import { syncMalLibrary } from "@/lib/providers/mal"
-import { syncSteamLibrary } from "@/lib/providers/steam"
-import type { ProviderSyncResult, RemoteCatalogItem } from "@/lib/providers/types"
-import { heartbeatSyncLease, releaseSyncLease, acquireSyncLease } from "@/lib/sync/lease"
+import type { RemoteAttribute, RemoteCatalogItem } from "@/lib/providers/types"
+import { heartbeatSyncLease } from "@/lib/sync/lease"
 import { syncManagedMainImage } from "@/lib/storage/images"
 
 function parseMemberships(value: string) {
@@ -32,55 +24,6 @@ function parseMemberships(value: string) {
 
 function parseSourceData(value: string) {
   return parseJson<Record<string, unknown>>(value, {})
-}
-
-function createRun(provider: Provider, trigger: SyncTrigger) {
-  const now = new Date()
-  const id = createId()
-  db.insert(syncRuns)
-    .values({
-      id,
-      provider,
-      trigger,
-      status: "running",
-      startedAt: now,
-      createdAt: now,
-      updatedAt: now,
-      statsJson: JSON.stringify({ importedItems: 0, createdNodes: 0, updatedNodes: 0, failedItems: 0 }),
-      metadataJson: JSON.stringify({ warnings: [] }),
-    })
-    .run()
-
-  return id
-}
-
-function updateRun(
-  runId: string,
-  values: Partial<typeof syncRuns.$inferInsert> & {
-    stats?: Record<string, unknown>
-    metadata?: Record<string, unknown>
-  },
-) {
-  db.update(syncRuns)
-    .set({
-      ...values,
-      statsJson: values.stats ? JSON.stringify(values.stats) : undefined,
-      metadataJson: values.metadata ? JSON.stringify(values.metadata) : undefined,
-      updatedAt: new Date(),
-    })
-    .where(eq(syncRuns.id, runId))
-    .run()
-}
-
-async function fetchProviderItems(account: ParsedSyncAccount): Promise<ProviderSyncResult> {
-  switch (account.provider) {
-    case "steam":
-      return syncSteamLibrary(account)
-    case "mal":
-      return syncMalLibrary(account)
-    default:
-      throw new Error(`Unsupported provider ${account.provider}`)
-  }
 }
 
 function mergeMemberships(
@@ -228,9 +171,29 @@ export async function reconcileRemoteItem(
       .run()
 
     if (item.attributes?.length) {
+      const uniqueAttributes: RemoteAttribute[] = []
+      const seen = new Set<string>()
+      const duplicates: string[] = []
+      for (const attribute of item.attributes) {
+        const identity = `${attribute.key}\u0000${attribute.value}`
+        if (seen.has(identity)) {
+          duplicates.push(`${attribute.key}: ${attribute.value}`)
+          continue
+        }
+        seen.add(identity)
+        uniqueAttributes.push(attribute)
+      }
+      if (duplicates.length) {
+        console.warn("Skipping duplicate node attributes", {
+          provider: item.provider,
+          externalId: item.externalId,
+          dropped: duplicates.length,
+          duplicates,
+        })
+      }
       tx.insert(nodeAttributes)
         .values(
-          item.attributes.map((attribute) => ({
+          uniqueAttributes.map((attribute) => ({
             id: createId(),
             nodeId,
             key: attribute.key,
@@ -281,147 +244,6 @@ export async function reconcileRemoteItem(
   return { nodeId, created: isNewNode }
 }
 
-function reconcileMissingMemberships(
-  provider: Provider,
-  membershipSnapshots: Record<string, string[]>,
-) {
-  const refs = db.query.externalRefs.findMany({ where: eq(externalRefs.provider, provider) }).sync()
-  const fetchedKinds = Object.keys(membershipSnapshots)
-  if (!fetchedKinds.length) return
-
-  for (const ref of refs) {
-    const existingMemberships = parseMemberships(ref.listMemberships)
-    const nextMemberships = existingMemberships.filter((membership) => {
-      const snapshot = membershipSnapshots[membership]
-      if (!snapshot) return true
-      return snapshot.includes(ref.externalId)
-    })
-
-    const changed = nextMemberships.length !== existingMemberships.length
-    if (!changed) continue
-
-    db.update(externalRefs)
-      .set({
-        listMemberships: JSON.stringify(nextMemberships),
-        isActive: nextMemberships.length > 0,
-        updatedAt: new Date(),
-      })
-      .where(eq(externalRefs.id, ref.id))
-      .run()
-
-    if (provider === "steam" && !nextMemberships.includes("owned")) {
-      db.delete(storageLocations)
-        .where(and(eq(storageLocations.nodeId, ref.nodeId), eq(storageLocations.sourceProvider, provider)))
-        .run()
-    }
-  }
-}
-
-export async function syncProvider(provider: Provider, trigger: SyncTrigger = "manual") {
-  const account = getSyncAccount(provider)
-  if (!account) {
-    throw new Error(`${PROVIDER_LABELS[provider]} is not configured.`)
-  }
-
-  if (!acquireSyncLease(provider)) {
-    throw new Error(`${PROVIDER_LABELS[provider]} sync is already running.`)
-  }
-
-  const runId = createRun(provider, trigger)
-  const stats = {
-    importedItems: 0,
-    createdNodes: 0,
-    updatedNodes: 0,
-    failedItems: 0,
-  }
-  const warnings: string[] = []
-  const successfulMembershipKinds: string[] = []
-
-  try {
-    const result = await fetchProviderItems(account)
-    warnings.push(...result.warnings)
-    successfulMembershipKinds.push(...Object.keys(result.membershipSnapshots))
-
-    for (const item of result.items) {
-      try {
-        const outcome = await reconcileRemoteItem(item, successfulMembershipKinds)
-        stats.importedItems += 1
-        if (outcome.created) {
-          stats.createdNodes += 1
-        } else {
-          stats.updatedNodes += 1
-        }
-      } catch (error) {
-        stats.failedItems += 1
-        warnings.push(
-          `${item.title}: ${error instanceof Error ? error.message : String(error)}`,
-        )
-      }
-    }
-
-    reconcileMissingMemberships(provider, result.membershipSnapshots)
-
-    const now = new Date()
-    upsertSyncAccount(provider, {
-      displayName: result.displayName ?? account.displayName,
-      externalAccountId: result.externalAccountId ?? account.externalAccountId,
-      profile: result.profile ?? account.profile,
-      lastSyncedAt: now,
-      lastSuccessfulSyncAt: stats.failedItems > 0 ? account.lastSuccessfulSyncAt : now,
-    })
-
-    updateRun(runId, {
-      status: stats.failedItems > 0 || warnings.length > 0 ? "partial" : "success",
-      finishedAt: now,
-      stats,
-      metadata: { warnings },
-    })
-
-    return {
-      runId,
-      status: stats.failedItems > 0 || warnings.length > 0 ? "partial" : "success",
-      stats,
-      warnings,
-    }
-  } catch (error) {
-    const now = new Date()
-    updateRun(runId, {
-      status: "failed",
-      finishedAt: now,
-      errorText: error instanceof Error ? error.message : String(error),
-      stats,
-      metadata: { warnings },
-    })
-
-    upsertSyncAccount(provider, {
-      lastSyncedAt: now,
-    })
-
-    throw error
-  } finally {
-    releaseSyncLease(provider)
-  }
-}
-
-export async function syncAllProviders(trigger: SyncTrigger = "manual") {
-  const enabledAccounts = listSyncAccounts().filter((account) => account.enabled)
-  const results = []
-
-  for (const account of enabledAccounts) {
-    try {
-      results.push(await syncProvider(account.provider, trigger))
-    } catch (error) {
-      results.push({
-        provider: account.provider,
-        status: "failed" as const,
-        error: error instanceof Error ? error.message : String(error),
-      })
-    }
-  }
-
-  return results
-}
-
 export function listSyncRuns(limit = 20) {
   return db.query.syncRuns.findMany({
     limit,
@@ -431,4 +253,21 @@ export function listSyncRuns(limit = 20) {
     stats: parseJson<Record<string, unknown>>(run.statsJson, {}),
     metadata: parseJson<Record<string, unknown>>(run.metadataJson, {}),
   }))
+}
+
+export function listRunFailedItems(runId: string) {
+  return db.select({
+    itemId: syncRunItems.id,
+    nodeId: syncRunItems.nodeId,
+    title: syncRunItems.title,
+    message: syncRunItems.errorText,
+  })
+    .from(syncRunItems)
+    .where(and(eq(syncRunItems.runId, runId), eq(syncRunItems.status, "failed")))
+    .orderBy(asc(syncRunItems.finishedAt))
+    .all()
+}
+
+export function clearCompletedSyncRuns() {
+  db.delete(syncRuns).where(ne(syncRuns.status, "running")).run()
 }

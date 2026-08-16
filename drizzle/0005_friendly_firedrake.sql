@@ -1,0 +1,1 @@
+ALTER TABLE `detail_sync_items` ADD `response_json` text;

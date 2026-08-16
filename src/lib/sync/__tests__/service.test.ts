@@ -3,11 +3,12 @@ import { describe, expect, it, vi } from "vitest"
 import { eq } from "drizzle-orm"
 
 import { db } from "@/lib/db/client"
-import { externalRefs } from "@/lib/db/schema"
+import { externalRefs, nodeAttributes } from "@/lib/db/schema"
 import { resetEnvCache } from "@/lib/env"
 import { configureSteamAccount } from "@/lib/integrations/service"
 import { getNodeById, listNodes, saveManualNode } from "@/lib/library/service"
-import { syncProvider } from "@/lib/sync/service"
+import { enqueueProviderSync, processProviderRun } from "@/lib/sync/provider-run"
+import { reconcileRemoteItem } from "@/lib/sync/service"
 
 const PNG_BUFFER = await sharp({
   create: {
@@ -36,7 +37,46 @@ function imageResponse(buffer = PNG_BUFFER) {
   })
 }
 
+async function runSteamSync() {
+  const { runId } = enqueueProviderSync("steam")
+  const result = await processProviderRun(runId)
+  if (!result) throw new Error("Sync run did not process.")
+  return result
+}
+
 describe("sync orchestration", () => {
+  it("dedupes duplicate node attributes before inserting them", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+
+    await reconcileRemoteItem(
+      {
+        provider: "mal",
+        externalId: "1",
+        mediaType: "ANIME",
+        title: "Frieren",
+        memberships: ["list"],
+        attributes: [
+          { key: "genre", value: "Fantasy", valueType: "text" },
+          { key: "genre", value: "Fantasy", valueType: "text" },
+          { key: "genre", value: "Adventure", valueType: "text" },
+        ],
+      },
+      [],
+    )
+
+    const node = db.query.nodes.findFirst().sync()
+    const attrs = db.query.nodeAttributes
+      .findMany({ where: eq(nodeAttributes.nodeId, node?.id ?? "") })
+      .sync()
+    expect(attrs).toHaveLength(2)
+    expect(warnSpy).toHaveBeenCalledWith(
+      "Skipping duplicate node attributes",
+      expect.objectContaining({ provider: "mal", externalId: "1", dropped: 1 }),
+    )
+
+    warnSpy.mockRestore()
+  })
+
   it("syncs Steam idempotently and preserves manual status overrides", async () => {
     process.env.STEAM_API_KEY = "test-steam-key"
     resetEnvCache()
@@ -92,7 +132,7 @@ describe("sync orchestration", () => {
       throw new Error(`Unexpected fetch: ${url}`)
     })
 
-    const firstRun = await syncProvider("steam")
+    const firstRun = await runSteamSync()
     expect(firstRun.status).toBe("success")
     expect(listNodes({ showHidden: true, showNsfw: true }).total).toBe(2)
 
@@ -118,7 +158,7 @@ describe("sync orchestration", () => {
       null,
     )
 
-    const secondRun = await syncProvider("steam")
+    const secondRun = await runSteamSync()
     expect(secondRun.status).toBe("success")
 
     const updated = hades?.id ? getNodeById(hades.id) : null
@@ -165,7 +205,7 @@ describe("sync orchestration", () => {
       throw new Error(`Unexpected fetch: ${url}`)
     })
 
-    const result = await syncProvider("steam")
+    const result = await runSteamSync()
     expect(result.status).toBe("partial")
     expect(result.warnings[0]).toContain("Wishlist response was not valid JSON")
     expect(result.warnings[0]).toContain("status=200")
@@ -209,7 +249,7 @@ describe("sync orchestration", () => {
       throw new Error(`Unexpected fetch: ${url}`)
     })
 
-    const result = await syncProvider("steam")
+    const result = await runSteamSync()
     expect(result.status).toBe("partial")
     expect(result.warnings[0]).toContain("set Profile and Game details visibility to Public")
     expect(listNodes({ showHidden: true, showNsfw: true }).total).toBe(1)
@@ -261,7 +301,7 @@ describe("sync orchestration", () => {
       throw new Error(`Unexpected fetch: ${url}`)
     })
 
-    const result = await syncProvider("steam")
+    const result = await runSteamSync()
     expect(result.status).toBe("success")
     expect(listNodes({ showHidden: true, showNsfw: true }).items[0]?.displayName).toBe(
       "Half-Life",

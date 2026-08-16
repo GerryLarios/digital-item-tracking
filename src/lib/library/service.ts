@@ -3,6 +3,7 @@ import "@/lib/server-only"
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm"
 
 import {
+  DEFAULT_LIBRARY_SORT,
   DEFAULT_PAGE_SIZE,
   EDITABLE_NODE_FIELDS,
   type CollectionMembership,
@@ -13,6 +14,7 @@ import { createId, parseJson, uniqueValues } from "@/lib/helpers"
 import { db } from "@/lib/db/client"
 import {
   externalRefs,
+  libraryNodeSummary,
   nodeAttributes,
   nodeLinks,
   nodes,
@@ -30,6 +32,8 @@ export type LibraryFilters = {
   medium?: string
   showHidden?: boolean
   showNsfw?: boolean
+  onlyNsfw?: boolean
+  sort?: string
   page?: number
   pageSize?: number
 }
@@ -46,24 +50,28 @@ function buildNodeWhere(filters: LibraryFilters) {
   if (filters.q) {
     const likeValue = `%${filters.q}%`
     conditions.push(
-      sql`(${nodes.displayName} like ${likeValue} or coalesce(${nodes.description}, '') like ${likeValue})`,
+      sql`(${libraryNodeSummary.displayName} like ${likeValue} or coalesce(${libraryNodeSummary.description}, '') like ${likeValue})`,
     )
   }
 
   if (filters.mediaType) {
-    conditions.push(eq(nodes.mediaType, filters.mediaType as never))
+    conditions.push(eq(libraryNodeSummary.mediaType, filters.mediaType as never))
   }
 
   if (filters.status) {
-    conditions.push(eq(nodes.status, filters.status as never))
+    conditions.push(eq(libraryNodeSummary.status, filters.status as never))
   }
 
   if (!filters.showHidden) {
-    conditions.push(eq(nodes.hidden, false))
+    conditions.push(eq(libraryNodeSummary.hidden, false))
   }
 
-  if (!filters.showNsfw) {
-    conditions.push(eq(nodes.nsfw, false))
+  if (!filters.showNsfw && !filters.onlyNsfw) {
+    conditions.push(eq(libraryNodeSummary.nsfw, false))
+  }
+
+  if (filters.onlyNsfw) {
+    conditions.push(eq(libraryNodeSummary.nsfw, true))
   }
 
   if (filters.provider) {
@@ -71,7 +79,7 @@ function buildNodeWhere(filters: LibraryFilters) {
       sql`exists (
         select 1
         from external_refs as provider_ref
-        where provider_ref.node_id = nodes.id
+        where provider_ref.node_id = ${libraryNodeSummary.id}
           and provider_ref.provider = ${filters.provider}
           and provider_ref.is_active = 1
       )`,
@@ -84,7 +92,7 @@ function buildNodeWhere(filters: LibraryFilters) {
         select 1
         from external_refs as collection_ref,
           json_each(collection_ref.list_memberships) as membership
-        where collection_ref.node_id = nodes.id
+        where collection_ref.node_id = ${libraryNodeSummary.id}
           and collection_ref.is_active = 1
           and membership.value = ${filters.collection}
       )`,
@@ -96,7 +104,7 @@ function buildNodeWhere(filters: LibraryFilters) {
       sql`exists (
         select 1
         from storage_locations as medium_location
-        where medium_location.node_id = nodes.id
+        where medium_location.node_id = ${libraryNodeSummary.id}
           and medium_location.medium = ${filters.medium}
           and medium_location.is_active = 1
       )`,
@@ -116,15 +124,13 @@ function mapNodeSummary(node: {
   releaseYear: number | null
   hidden: boolean
   nsfw: boolean
+  isWishlisted: boolean
   updatedAt: Date
-  externalRefs: Array<{ isActive: boolean; provider: Provider }>
-  storageLocations: Array<{ isActive: boolean; medium: string }>
-  images: Array<{ role: string; id: string }>
+  providersJson: string | null
+  mediumsJson: string | null
+  mainImageId: string | null
+  thumbnailImageId: string | null
 }) {
-
-  const mainImage = node.images.find((image) => image.role === "main")
-  const thumbnailImage = node.images.find((image) => image.role === "thumbnail")
-
   return {
     id: node.id,
     displayName: node.displayName,
@@ -134,16 +140,34 @@ function mapNodeSummary(node: {
     releaseYear: node.releaseYear,
     hidden: node.hidden,
     nsfw: node.nsfw,
+    isWishlisted: node.isWishlisted,
     updatedAt: node.updatedAt,
-    providers: uniqueValues(
-      node.externalRefs.filter((ref) => ref.isActive).map((ref) => ref.provider),
-    ),
-    mediums: uniqueValues(
-      node.storageLocations.filter((location) => location.isActive).map((location) => location.medium),
-    ),
-    mainImageId: mainImage?.id ?? null,
-    thumbnailImageId: thumbnailImage?.id ?? null,
+    providers: parseJson<Provider[]>(node.providersJson, []),
+    mediums: parseJson<string[]>(node.mediumsJson, []),
+    mainImageId: node.mainImageId,
+    thumbnailImageId: node.thumbnailImageId,
   }
+}
+
+const SORT_COLUMNS = {
+  updated: libraryNodeSummary.updatedAt,
+  added: libraryNodeSummary.createdAt,
+  title: libraryNodeSummary.displayName,
+  release_year: libraryNodeSummary.releaseYear,
+  status: libraryNodeSummary.status,
+  medium: libraryNodeSummary.mediumsJson,
+  wishlist: libraryNodeSummary.isWishlisted,
+  rating: libraryNodeSummary.rating,
+} as const
+
+function sortOrder(sort: string | undefined) {
+  const value = sort ?? DEFAULT_LIBRARY_SORT
+  const separator = value.lastIndexOf("_")
+  const field = value.slice(0, separator)
+  const direction = value.slice(separator + 1)
+  const column = SORT_COLUMNS[field as keyof typeof SORT_COLUMNS]
+  if (!column) return [desc(libraryNodeSummary.updatedAt)]
+  return [direction === "asc" ? asc(column) : desc(column), asc(libraryNodeSummary.id)]
 }
 
 export function listNodes(filters: LibraryFilters) {
@@ -152,23 +176,20 @@ export function listNodes(filters: LibraryFilters) {
   const where = buildNodeWhere(filters)
 
   const total =
-    db.select({ count: sql<number>`count(*)` }).from(nodes).where(where).get()?.count ?? 0
+    db
+      .select({ count: sql<number>`count(*)` })
+      .from(libraryNodeSummary)
+      .where(where)
+      .get()?.count ?? 0
 
-  const records = db.query.nodes.findMany({
-    where,
-    limit: pageSize,
-    offset: (page - 1) * pageSize,
-    with: {
-      externalRefs: true,
-      storageLocations: true,
-      images: true,
-    },
-    orderBy: (table, operators) => [
-      desc(table.updatedAt),
-      asc(table.displayName),
-      operators.asc(table.id),
-    ],
-  }).sync()
+  const records = db
+    .select()
+    .from(libraryNodeSummary)
+    .where(where)
+    .orderBy(...sortOrder(filters.sort))
+    .limit(pageSize)
+    .offset((page - 1) * pageSize)
+    .all()
 
   return {
     page,

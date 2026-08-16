@@ -132,6 +132,64 @@ describe("per-item detail sync", () => {
     fetchSpy.mockRestore()
   })
 
+  it("keeps the raw Steam payload when detail parsing fails", async () => {
+    const nodeId = insertProviderNode({
+      provider: "steam",
+      externalId: "999",
+      memberships: ["owned"],
+    })
+    const rawResponse = {
+      999: {
+        success: true,
+        data: { name: "Broken", content_descriptors: { ids: "oops" } },
+      },
+    }
+
+    const fetchSpy = vi.spyOn(global, "fetch").mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.includes("/api/appdetails")) return jsonResponse(rawResponse)
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    await expect(syncNodeDetails(nodeId)).rejects.toMatchObject({
+      name: "ProviderParseError",
+      response: rawResponse,
+    })
+
+    fetchSpy.mockRestore()
+  })
+
+  it("accepts a null content descriptor note from Steam", async () => {
+    const nodeId = insertProviderNode({
+      provider: "steam",
+      externalId: "150",
+      memberships: ["owned"],
+    })
+
+    const fetchSpy = vi.spyOn(global, "fetch").mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.includes("/api/appdetails")) {
+        return jsonResponse({
+          150: {
+            success: true,
+            data: {
+              name: "Null notes game",
+              steam_appid: 150,
+              content_descriptors: { ids: [], notes: null },
+            },
+          },
+        })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    await syncNodeDetails(nodeId)
+    expect(getNodeById(nodeId)?.displayName).toBe("Null notes game")
+    expect(getNodeById(nodeId)?.nsfw).toBe(false)
+
+    fetchSpy.mockRestore()
+  })
+
   it("maps comprehensive MAL details and retains the raw payload", async () => {
     const nodeId = insertProviderNode({
       provider: "mal",

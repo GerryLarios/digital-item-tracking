@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import { db } from "@/lib/db/client"
-import { externalRefs, nodes } from "@/lib/db/schema"
+import { externalRefs, nodeAttributes, nodes, storageLocations } from "@/lib/db/schema"
 import { createId } from "@/lib/helpers"
 import { deleteNode, getNodeById, listNodes, saveManualNode } from "@/lib/library/service"
 
@@ -119,5 +119,114 @@ describe("library service", () => {
     const result = listNodes({ provider: "steam", collection: "wishlist" })
     expect(result.total).toBe(1)
     expect(result.items[0]?.id).toBe(wishlistNodeId)
+  })
+
+  it("sorts by title, wishlist status, and rating from the summary view", () => {
+    const now = new Date()
+    const alphaId = createId()
+    const betaId = createId()
+    const gammaId = createId()
+
+    db.insert(nodes)
+      .values([
+        { id: alphaId, mediaType: "GAME", displayName: "Alpha", status: "NOT_STARTED", createdAt: now, updatedAt: now },
+        { id: betaId, mediaType: "GAME", displayName: "Beta", status: "NOT_STARTED", createdAt: now, updatedAt: now },
+        { id: gammaId, mediaType: "GAME", displayName: "Gamma", status: "NOT_STARTED", createdAt: now, updatedAt: now },
+      ])
+      .run()
+
+    db.insert(externalRefs)
+      .values([
+        {
+          id: createId(),
+          nodeId: alphaId,
+          provider: "steam",
+          externalId: "10",
+          listMemberships: JSON.stringify(["wishlist"]),
+          isActive: true,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ])
+      .run()
+
+    db.insert(nodeAttributes)
+      .values([
+        {
+          id: createId(),
+          nodeId: alphaId,
+          key: "score",
+          value: "8.5",
+          valueType: "number",
+          source: "system",
+          sourceProvider: "mal",
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: createId(),
+          nodeId: betaId,
+          key: "score",
+          value: "9.5",
+          valueType: "number",
+          source: "system",
+          sourceProvider: "mal",
+          createdAt: now,
+          updatedAt: now,
+        },
+      ])
+      .run()
+
+    db.insert(storageLocations)
+      .values([
+        {
+          id: createId(),
+          nodeId: alphaId,
+          label: "Steam library",
+          medium: "digital",
+          source: "system",
+          sourceProvider: "steam",
+          isActive: true,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ])
+      .run()
+
+    const byTitle = listNodes({ sort: "title_asc" })
+    expect(byTitle.items.map((item) => item.id)).toEqual([alphaId, betaId, gammaId])
+
+    const wishlisted = listNodes({ sort: "wishlist_desc" })
+    expect(wishlisted.items[0]?.id).toBe(alphaId)
+
+    const byRating = listNodes({ sort: "rating_desc" })
+    expect(byRating.items[0]?.id).toBe(betaId)
+    expect(byRating.items[1]?.id).toBe(alphaId)
+
+    const alpha = listNodes({ q: "Alpha" }).items[0]
+    expect(alpha?.providers).toEqual(["steam"])
+    expect(alpha?.mediums).toEqual(["digital"])
+    expect(alpha?.isWishlisted).toBe(true)
+    expect(alpha?.releaseYear).toBeNull()
+    expect(listNodes({ q: "Gamma" }).items[0]?.isWishlisted).toBe(false)
+  })
+
+  it("filters to only NSFW items", () => {
+    const now = new Date()
+    const nsfwId = createId()
+    const safeId = createId()
+
+    db.insert(nodes)
+      .values([
+        { id: nsfwId, mediaType: "GAME", displayName: "NSFW game", status: "NOT_STARTED", nsfw: true, createdAt: now, updatedAt: now },
+        { id: safeId, mediaType: "GAME", displayName: "Safe game", status: "NOT_STARTED", nsfw: false, createdAt: now, updatedAt: now },
+      ])
+      .run()
+
+    const onlyNsfw = listNodes({ onlyNsfw: true })
+    expect(onlyNsfw.items.map((item) => item.id)).toEqual([nsfwId])
+
+    const withNsfw = listNodes({ showNsfw: true })
+    expect(withNsfw.items.map((item) => item.id).sort()).toEqual([nsfwId, safeId])
   })
 })

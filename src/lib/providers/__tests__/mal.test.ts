@@ -32,6 +32,21 @@ describe("MyAnimeList provider", () => {
                 updated_at: "2024-01-01T00:00:00+00:00",
               },
             },
+            {
+              node: {
+                id: 3,
+                title: "Highschool DxD",
+                synopsis: "Rias is nice.",
+                nsfw: "white",
+                genres: [{ name: "Ecchi" }, { name: "Harem" }],
+                studios: [{ name: "TNK" }],
+                main_picture: { medium: "https://example.test/dxd.png" },
+              },
+              list_status: {
+                status: "completed",
+                updated_at: "2024-01-02T00:00:00+00:00",
+              },
+            },
           ],
           paging: {},
         })
@@ -79,12 +94,18 @@ describe("MyAnimeList provider", () => {
 
     const result = await syncMalLibrary(account)
 
-    expect(result.items).toHaveLength(2)
+    expect(result.items).toHaveLength(3)
     expect(result.items[0]?.status).toBe("IN_PROGRESS")
     expect(result.items[0]?.attributes?.some((attribute) => attribute.value === "Fantasy")).toBe(true)
-    expect(result.membershipSnapshots.list).toEqual(["1"])
+    expect(result.membershipSnapshots.list).toEqual(["1", "3"])
     expect(result.membershipSnapshots.favorite).toEqual(["2"])
     expect(result.displayName).toBe("anime-owner")
+
+    const frieren = result.items.find((item) => item.externalId === "1")
+    const dxd = result.items.find((item) => item.externalId === "3")
+    expect(frieren?.nsfw).toBe(false)
+    expect(dxd?.nsfw).toBe(true)
+    expect(dxd?.attributes?.some((attribute) => attribute.value === "Ecchi")).toBe(true)
 
     fetchSpy.mockRestore()
   })

@@ -1,50 +1,55 @@
-import Link from "next/link"
+import Link from "next/link";
 
-import { LibraryFilterBar } from "@/components/library/filter-bar"
-import { NodeCard } from "@/components/library/node-card"
-import { NodeTable } from "@/components/library/node-table"
-import { buttonVariants } from "@/components/ui/button"
-import { listNodes } from "@/lib/library/service"
-import { librarySearchSchema } from "@/lib/validation"
+import { LibraryFilterBar } from "@/components/library/filter-bar";
+import { NodeCard } from "@/components/library/node-card";
+import { NodeTable } from "@/components/library/node-table";
+import { buttonVariants } from "@/components/ui/button";
+import { listNodes } from "@/lib/library/service";
+import { librarySearchSchema } from "@/lib/validation";
 
 export const metadata = {
   title: "Library",
-}
+};
 
-export const dynamic = "force-dynamic"
+export const dynamic = "force-dynamic";
 
 function importNotice(params: Record<string, string | string[] | undefined>) {
   if (typeof params.importError === "string") {
-    return { error: true, message: params.importError }
+    return { error: true, message: params.importError };
   }
-  if (typeof params.importCreated !== "string" || typeof params.importMerged !== "string") {
-    return null
+  if (
+    typeof params.importCreated !== "string" ||
+    typeof params.importMerged !== "string"
+  ) {
+    return null;
   }
 
-  const artwork = Number(params.artworkSkipped ?? 0)
+  const artwork = Number(params.artworkSkipped ?? 0);
   return {
     error: false,
     message: `Import complete: ${Number(params.importCreated)} created, ${Number(params.importMerged)} merged.${artwork ? ` ${artwork} artwork records skipped because image files are not included.` : ""}`,
-  }
+  };
 }
 
-function buildQueryString(params: Record<string, string | number | boolean | undefined>) {
-  const searchParams = new URLSearchParams()
+function buildQueryString(
+  params: Record<string, string | number | boolean | undefined>,
+) {
+  const searchParams = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
-    if (value === undefined || value === "") continue
-    searchParams.set(key, String(value))
+    if (value === undefined || value === "") continue;
+    searchParams.set(key, String(value));
   }
-  return searchParams.toString()
+  return searchParams.toString();
 }
 
 export default async function LibraryPage({
   searchParams,
 }: {
-  searchParams: Promise<Record<string, string | string[] | undefined>>
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const params = await searchParams
-  const parsedSearchParams = librarySearchSchema.parse(params)
-  const notice = importNotice(params)
+  const params = await searchParams;
+  const parsedSearchParams = librarySearchSchema.parse(params);
+  const notice = importNotice(params);
   const results = listNodes({
     q: parsedSearchParams.q,
     mediaType: parsedSearchParams.mediaType,
@@ -54,8 +59,10 @@ export default async function LibraryPage({
     medium: parsedSearchParams.medium,
     showHidden: parsedSearchParams.showHidden,
     showNsfw: parsedSearchParams.showNsfw,
+    onlyNsfw: parsedSearchParams.onlyNsfw,
+    sort: parsedSearchParams.sort,
     page: parsedSearchParams.page,
-  })
+  });
 
   const paginationBase = {
     q: parsedSearchParams.q,
@@ -66,8 +73,10 @@ export default async function LibraryPage({
     medium: parsedSearchParams.medium,
     showHidden: parsedSearchParams.showHidden ? "true" : undefined,
     showNsfw: parsedSearchParams.showNsfw ? "true" : undefined,
+    onlyNsfw: parsedSearchParams.onlyNsfw ? "true" : undefined,
+    sort: parsedSearchParams.sort,
     view: parsedSearchParams.view,
-  }
+  };
 
   return (
     <div className="space-y-6">
@@ -82,7 +91,8 @@ export default async function LibraryPage({
         <div>
           <h2 className="font-medium">Import or export library data</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            JSON imports create or merge items. Artwork files and account credentials are not included.
+            JSON imports create or merge items. Artwork files and account
+            credentials are not included.
           </p>
         </div>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
@@ -114,12 +124,15 @@ export default async function LibraryPage({
           </form>
         </div>
       </div>
-      <LibraryFilterBar total={results.total} initialQuery={parsedSearchParams.q ?? ""} />
+      <LibraryFilterBar
+        total={results.total}
+        initialQuery={parsedSearchParams.q ?? ""}
+      />
       {results.items.length ? (
         parsedSearchParams.view === "list" ? (
           <NodeTable items={results.items} />
         ) : (
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <div className="divide-y divide-border/80">
             {results.items.map((item) => (
               <NodeCard key={item.id} item={item} />
             ))}
@@ -166,5 +179,5 @@ export default async function LibraryPage({
         </div>
       </div>
     </div>
-  )
+  );
 }

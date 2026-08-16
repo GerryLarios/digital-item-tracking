@@ -32,6 +32,16 @@ export type RemoteCatalogItem = {
   storageLocations?: RemoteStorageLocation[]
 }
 
+export class ProviderParseError extends Error {
+  response: unknown
+
+  constructor(message: string, response: unknown) {
+    super(message)
+    this.name = "ProviderParseError"
+    this.response = response
+  }
+}
+
 export type ProviderSyncResult = {
   items: RemoteCatalogItem[]
   warnings: string[]

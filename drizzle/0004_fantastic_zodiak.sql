@@ -1,0 +1,1 @@
+ALTER TABLE `detail_sync_jobs` ADD `provider` text;

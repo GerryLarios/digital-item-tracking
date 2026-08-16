@@ -30,6 +30,7 @@ DELETE FROM storage_locations;
 DELETE FROM external_refs;
 DELETE FROM detail_sync_items;
 DELETE FROM detail_sync_jobs;
+DELETE FROM sync_run_items;
 DELETE FROM nodes;
 DELETE FROM sync_runs;
 DELETE FROM sync_leases;

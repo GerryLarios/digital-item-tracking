@@ -1,5 +1,5 @@
 import { eq, sql } from "drizzle-orm"
-import { describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { db } from "@/lib/db/client"
 import {
@@ -12,6 +12,19 @@ import {
 } from "@/lib/db/schema"
 import { createId, parseJson } from "@/lib/helpers"
 import { exportLibrary, importLibrary } from "@/lib/library/transfer"
+
+vi.mock("@/lib/sync/enrich", () => ({
+  findGameMatch: vi.fn(),
+  applyProviderMatch: vi.fn(),
+}))
+
+import {
+  applyProviderMatch,
+  findGameMatch,
+} from "@/lib/sync/enrich"
+
+const mockedFindGameMatch = vi.mocked(findGameMatch)
+const mockedApplyProviderMatch = vi.mocked(applyProviderMatch)
 
 function seedAggregate(id = createId(), externalId = "100") {
   const createdAt = new Date("2025-01-01T00:00:00.000Z")
@@ -102,7 +115,12 @@ function seedAggregate(id = createId(), externalId = "100") {
 }
 
 describe("library JSON transfer", () => {
-  it("round-trips all non-binary item relationships", () => {
+  beforeEach(() => {
+    mockedFindGameMatch.mockReset()
+    mockedApplyProviderMatch.mockReset()
+  })
+
+  it("round-trips all non-binary item relationships", async () => {
     const nodeId = seedAggregate()
     const archive = exportLibrary()
 
@@ -114,9 +132,16 @@ describe("library JSON transfer", () => {
     expect(archive.items[0].images[0].sourceUrl).toContain("cdn.example.test")
 
     db.delete(nodes).where(eq(nodes.id, nodeId)).run()
-    const result = importLibrary(archive)
+    const result = await importLibrary(archive)
 
-    expect(result).toEqual({ created: 1, merged: 0, artworkSkipped: 1 })
+    expect(result).toEqual({
+      created: 1,
+      merged: 0,
+      artworkSkipped: 1,
+      enriched: 0,
+      unmatched: 0,
+      failedEnrichments: 0,
+    })
     expect(db.select().from(nodes).get()).toMatchObject({
       id: nodeId,
       displayName: "Exported game",
@@ -131,7 +156,7 @@ describe("library JSON transfer", () => {
     expect(db.select().from(images).all()).toHaveLength(0)
   })
 
-  it("overwrites core fields and merges relationships without duplicates", () => {
+  it("overwrites core fields and merges relationships without duplicates", async () => {
     const nodeId = seedAggregate()
     const archive = exportLibrary()
     const item = archive.items[0]
@@ -155,7 +180,7 @@ describe("library JSON transfer", () => {
       sourceData: JSON.stringify({ conflict: "current", local: true }),
     }).where(eq(externalRefs.id, ref.id)).run()
 
-    const result = importLibrary(archive)
+    const result = await importLibrary(archive)
 
     expect(result).toMatchObject({ created: 0, merged: 1 })
     expect(db.select().from(nodes).where(eq(nodes.id, nodeId)).get()?.displayName)
@@ -177,7 +202,7 @@ describe("library JSON transfer", () => {
     })
   })
 
-  it("rejects conflicting and archive-internal identities before writes", () => {
+  it("rejects conflicting and archive-internal identities before writes", async () => {
     const firstId = seedAggregate(createId(), "300")
     const secondId = seedAggregate(createId(), "301")
     const archive = exportLibrary()
@@ -186,24 +211,73 @@ describe("library JSON transfer", () => {
     archive.items = [first]
     archive.itemCount = 1
 
-    expect(() => importLibrary(archive)).toThrow("resolve to different items")
+    await expect(importLibrary(archive)).rejects.toThrow("resolve to different items")
     expect(db.select().from(nodes).where(eq(nodes.id, firstId)).get()?.displayName)
       .toBe("Exported game")
 
     const internallyDuplicated = exportLibrary()
     internallyDuplicated.items[1].id = internallyDuplicated.items[0].id
-    expect(() => importLibrary(internallyDuplicated)).toThrow()
+    await expect(importLibrary(internallyDuplicated)).rejects.toThrow()
     expect(db.select().from(nodes).where(eq(nodes.id, secondId)).get()).toBeDefined()
   })
 
-  it("rejects unsupported archive versions", () => {
-    expect(() => importLibrary({
+  it("rejects unsupported archive versions", async () => {
+    await expect(importLibrary({
       format: "registered-backlog-items",
       version: 2,
       exportedAt: new Date().toISOString(),
       itemCount: 0,
       items: [],
-    })).toThrow()
+    })).rejects.toThrow()
     expect(db.select().from(nodes).all()).toHaveLength(0)
+  })
+
+  it("imports hand-authored lists and enriches bare game entries", async () => {
+    mockedFindGameMatch.mockResolvedValue({ provider: "rawg", externalId: "42" })
+    mockedApplyProviderMatch.mockResolvedValue({ provider: "rawg", externalId: "42" })
+
+    const result = await importLibrary([
+      { displayName: "Bare Game" },
+      { displayName: "Rich Book", mediaType: "BOOK", description: "Already has metadata" },
+    ])
+
+    expect(result).toEqual({
+      created: 2,
+      merged: 0,
+      artworkSkipped: 0,
+      enriched: 1,
+      unmatched: 0,
+      failedEnrichments: 0,
+    })
+    const createdNodes = db.select().from(nodes).all()
+    expect(createdNodes).toHaveLength(2)
+    expect(createdNodes.find((node) => node.displayName === "Bare Game")).toMatchObject({
+      mediaType: "GAME",
+      status: "NOT_STARTED",
+      description: null,
+    })
+    expect(mockedApplyProviderMatch).toHaveBeenCalledTimes(1)
+  })
+
+  it("uses the steamAppId hint without searching and counts misses", async () => {
+    mockedFindGameMatch.mockResolvedValue(null)
+
+    const result = await importLibrary({
+      items: [
+        { displayName: "Known AppId", steamAppId: 570 },
+        { displayName: "Unknown Game" },
+      ],
+    })
+
+    expect(result).toMatchObject({ created: 2, enriched: 1, unmatched: 1 })
+    expect(mockedFindGameMatch).toHaveBeenCalledTimes(1)
+    expect(mockedFindGameMatch).toHaveBeenCalledWith("Unknown Game")
+    expect(mockedApplyProviderMatch).toHaveBeenCalledWith(
+      expect.any(String),
+      { provider: "steam", externalId: "570" },
+    )
+    const ref = db.select().from(externalRefs).get()!
+    expect(ref).toMatchObject({ provider: "steam", externalId: "570" })
+    expect(parseJson<string[]>(ref.listMemberships, [])).toEqual(["manual"])
   })
 })

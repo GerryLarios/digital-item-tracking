@@ -37,9 +37,9 @@ export const STORAGE_MEDIA = [
   "other",
 ] as const;
 
-export const ENTRY_SOURCES = ["manual", "steam", "mal", "system"] as const;
+export const ENTRY_SOURCES = ["manual", "steam", "mal", "rawg", "system"] as const;
 
-export const PROVIDERS = ["steam", "mal"] as const;
+export const PROVIDERS = ["steam", "mal", "rawg"] as const;
 export const COLLECTION_MEMBERSHIPS = [
   "wishlist",
   "owned",
@@ -151,4 +151,5 @@ export const NODE_STATUS_LABELS: Record<NodeStatus, string> = {
 export const PROVIDER_LABELS: Record<Provider, string> = {
   steam: "Steam",
   mal: "MyAnimeList",
+  rawg: "RAWG",
 };

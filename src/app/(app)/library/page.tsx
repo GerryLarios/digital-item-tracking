@@ -25,9 +25,15 @@ function importNotice(params: Record<string, string | string[] | undefined>) {
   }
 
   const artwork = Number(params.artworkSkipped ?? 0);
+  const enriched = Number(params.importEnriched ?? 0);
+  const unmatched = Number(params.importUnmatched ?? 0);
+  const enrichFailed = Number(params.importEnrichFailed ?? 0);
+  const enrichSummary = enriched || unmatched
+    ? ` Metadata matched for ${enriched} item${enriched === 1 ? "" : "s"}, ${unmatched} not found.${enrichFailed ? ` ${enrichFailed} lookups failed.` : ""}`
+    : "";
   return {
     error: false,
-    message: `Import complete: ${Number(params.importCreated)} created, ${Number(params.importMerged)} merged.${artwork ? ` ${artwork} artwork records skipped because image files are not included.` : ""}`,
+    message: `Import complete: ${Number(params.importCreated)} created, ${Number(params.importMerged)} merged.${artwork ? ` ${artwork} artwork records skipped because image files are not included.` : ""}${enrichSummary}`,
   };
 }
 

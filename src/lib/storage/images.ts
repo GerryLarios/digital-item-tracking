@@ -7,6 +7,7 @@ import { and, eq, inArray } from "drizzle-orm"
 import sharp from "sharp"
 
 import { createId } from "@/lib/helpers"
+import type { Provider } from "@/lib/constants"
 import { checksumBuffer } from "@/lib/crypto"
 import { ensureDataDirectories, getDataPaths, resolveManagedPath, toManagedRelativePath } from "@/lib/data-dir"
 import { db } from "@/lib/db/client"
@@ -151,7 +152,7 @@ async function persistImageSet({
   thumbWidth: number
   thumbHeight: number
   sourceUrl?: string | null
-  sourceProvider?: "steam" | "mal" | null
+  sourceProvider?: Provider | null
   managed: boolean
 }) {
   ensureDataDirectories()
@@ -252,7 +253,7 @@ export async function removePrimaryImageSet(nodeId: string) {
 
 export async function syncManagedMainImage(
   nodeId: string,
-  provider: "steam" | "mal",
+  provider: Provider,
   sourceUrl: string,
 ) {
   const response = await fetchWithTimeout(sourceUrl, {

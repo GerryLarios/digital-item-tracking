@@ -3,7 +3,9 @@
 import { redirect } from "next/navigation"
 
 import { requireSession } from "@/lib/auth"
+import { PROVIDER_LABELS } from "@/lib/constants"
 import { deleteNode, saveManualNode } from "@/lib/library/service"
+import { enrichGameNode } from "@/lib/sync/enrich"
 import { syncNodeDetails } from "@/lib/sync/item-details"
 import {
   flattenZodErrors,
@@ -99,6 +101,29 @@ export async function syncNodeDetailsAction(formData: FormData) {
     destination = `/library/${nodeId}?sync=${encodeURIComponent(message)}`
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to sync item details."
+    destination = `/library/${nodeId}?syncError=${encodeURIComponent(message)}`
+  }
+
+  redirect(destination)
+}
+
+export async function findProviderMatchAction(formData: FormData) {
+  await requireSession()
+
+  const nodeId = formData.get("nodeId")
+  if (typeof nodeId !== "string" || !nodeId) {
+    redirect("/library")
+  }
+
+  let destination: string
+  try {
+    const match = await enrichGameNode(nodeId)
+    const message = match
+      ? `Exact match found on ${PROVIDER_LABELS[match.provider]} (${match.provider}/${match.externalId}); details updated.`
+      : "No exact provider match found for this title."
+    destination = `/library/${nodeId}?sync=${encodeURIComponent(message)}`
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to look up this item."
     destination = `/library/${nodeId}?syncError=${encodeURIComponent(message)}`
   }
 

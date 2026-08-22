@@ -350,6 +350,35 @@ async function fetchWishlistMetadata(appIds: number[]) {
   return metadata;
 }
 
+const steamStoreSearchSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        type: z.string(),
+        name: z.string(),
+        id: z.number(),
+      }),
+    )
+    .default([]),
+});
+
+export async function searchSteamAppByTitle(title: string) {
+  const url = new URL("https://store.steampowered.com/api/storesearch");
+  url.searchParams.set("term", title);
+  url.searchParams.set("l", "english");
+  url.searchParams.set("cc", "US");
+
+  const payload = steamStoreSearchSchema.parse(await fetchJson<unknown>(url));
+  const normalized = title.trim().toLowerCase();
+  if (!normalized) return null;
+
+  const match = payload.items.find(
+    (item) => item.type === "APP" && item.name.trim().toLowerCase() === normalized,
+  );
+
+  return match ? String(match.id) : null;
+}
+
 export async function fetchSteamItemDetails(
   externalId: string,
   memberships: string[],

@@ -8,17 +8,22 @@ import { externalRefs, nodes } from "@/lib/db/schema"
 import { parseJson } from "@/lib/helpers"
 import { getSyncAccount } from "@/lib/integrations/service"
 import { fetchMalItemDetails } from "@/lib/providers/mal"
+import { fetchRawgItemDetails } from "@/lib/providers/rawg"
 import { fetchSteamItemDetails } from "@/lib/providers/steam"
 import { ProviderParseError, type RemoteCatalogItem } from "@/lib/providers/types"
 import { reconcileRemoteItem } from "@/lib/sync/service"
 
-async function fetchDetails(
+export async function fetchDetails(
   provider: Provider,
   externalId: string,
   memberships: string[],
 ): Promise<RemoteCatalogItem> {
   if (provider === "steam") {
     return fetchSteamItemDetails(externalId, memberships)
+  }
+
+  if (provider === "rawg") {
+    return fetchRawgItemDetails(externalId, memberships)
   }
 
   const account = getSyncAccount("mal")

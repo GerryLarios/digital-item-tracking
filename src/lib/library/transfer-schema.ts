@@ -142,3 +142,24 @@ export const libraryArchiveSchema = z.object({
 
 export type LibraryArchive = z.infer<typeof libraryArchiveSchema>
 export type LibraryArchiveItem = z.infer<typeof libraryArchiveItemSchema>
+
+export const looseImportItemSchema = z.object({
+  displayName: z.string().min(1),
+  mediaType: z.enum(MEDIA_TYPES).default("GAME"),
+  steamAppId: z.union([z.string(), z.number()]).optional(),
+  description: z.string().nullish(),
+  releaseYear: z.number().int().nullish(),
+  status: z.enum(NODE_STATUSES).optional(),
+  nsfw: z.boolean().optional(),
+  hidden: z.boolean().optional(),
+  notes: z.string().nullish(),
+})
+
+const looseImportItemsSchema = z.array(looseImportItemSchema).min(1)
+
+export const looseImportSchema = z.union([
+  looseImportItemsSchema,
+  z.object({ items: looseImportItemsSchema }).transform((wrapper) => wrapper.items),
+])
+
+export type LooseImportItem = z.infer<typeof looseImportItemSchema>

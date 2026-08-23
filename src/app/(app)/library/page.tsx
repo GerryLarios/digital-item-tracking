@@ -4,6 +4,7 @@ import { LibraryFilterBar } from "@/components/library/filter-bar";
 import { NodeCard } from "@/components/library/node-card";
 import { NodeTable } from "@/components/library/node-table";
 import { buttonVariants } from "@/components/ui/button";
+import { buildQueryString } from "@/lib/helpers";
 import { listNodes } from "@/lib/library/service";
 import { librarySearchSchema } from "@/lib/validation";
 
@@ -13,35 +14,6 @@ export const metadata = {
 
 export const dynamic = "force-dynamic";
 
-function importNotice(params: Record<string, string | string[] | undefined>) {
-  if (typeof params.importError === "string") {
-    return { error: true, message: params.importError };
-  }
-  if (
-    typeof params.importCreated !== "string" ||
-    typeof params.importMerged !== "string"
-  ) {
-    return null;
-  }
-
-  const artwork = Number(params.artworkSkipped ?? 0);
-  return {
-    error: false,
-    message: `Import complete: ${Number(params.importCreated)} created, ${Number(params.importMerged)} merged.${artwork ? ` ${artwork} artwork records skipped because image files are not included.` : ""}`,
-  };
-}
-
-function buildQueryString(
-  params: Record<string, string | number | boolean | undefined>,
-) {
-  const searchParams = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value === undefined || value === "") continue;
-    searchParams.set(key, String(value));
-  }
-  return searchParams.toString();
-}
-
 export default async function LibraryPage({
   searchParams,
 }: {
@@ -49,7 +21,6 @@ export default async function LibraryPage({
 }) {
   const params = await searchParams;
   const parsedSearchParams = librarySearchSchema.parse(params);
-  const notice = importNotice(params);
   const results = listNodes({
     q: parsedSearchParams.q,
     mediaType: parsedSearchParams.mediaType,
@@ -80,50 +51,6 @@ export default async function LibraryPage({
 
   return (
     <div className="space-y-6">
-      {notice ? (
-        <div
-          className={`rounded-lg border px-4 py-3 text-sm ${notice.error ? "border-destructive/50 text-destructive" : "bg-background"}`}
-        >
-          {notice.message}
-        </div>
-      ) : null}
-      <div className="flex flex-col gap-4 rounded-xl border bg-background p-4 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <h2 className="font-medium">Import or export library data</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            JSON imports create or merge items. Artwork files and account
-            credentials are not included.
-          </p>
-        </div>
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-          <a
-            href="/api/library/export"
-            className={buttonVariants({ variant: "outline" })}
-          >
-            Export JSON
-          </a>
-          <form
-            action="/api/library/import"
-            method="post"
-            encType="multipart/form-data"
-            className="flex flex-col gap-2 sm:flex-row sm:items-end"
-          >
-            <label className="grid gap-1 text-sm">
-              <span className="font-medium">Library JSON</span>
-              <input
-                type="file"
-                name="file"
-                accept="application/json,.json"
-                required
-                className="max-w-72 text-sm file:mr-3 file:rounded-md file:border file:bg-background file:px-3 file:py-1.5"
-              />
-            </label>
-            <button type="submit" className={buttonVariants()}>
-              Import JSON
-            </button>
-          </form>
-        </div>
-      </div>
       <LibraryFilterBar
         total={results.total}
         initialQuery={parsedSearchParams.q ?? ""}

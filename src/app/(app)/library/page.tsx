@@ -4,6 +4,7 @@ import { LibraryFilterBar } from "@/components/library/filter-bar";
 import { NodeCard } from "@/components/library/node-card";
 import { NodeTable } from "@/components/library/node-table";
 import { buttonVariants } from "@/components/ui/button";
+import { getMalImportFailures } from "@/lib/library/mal-import";
 import { listNodes } from "@/lib/library/service";
 import { librarySearchSchema } from "@/lib/validation";
 
@@ -50,6 +51,7 @@ export default async function LibraryPage({
   const params = await searchParams;
   const parsedSearchParams = librarySearchSchema.parse(params);
   const notice = importNotice(params);
+  const malFailures = getMalImportFailures();
   const results = listNodes({
     q: parsedSearchParams.q,
     mediaType: parsedSearchParams.mediaType,
@@ -91,8 +93,10 @@ export default async function LibraryPage({
         <div>
           <h2 className="font-medium">Import or export library data</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            JSON imports create or merge items. Artwork files and account
-            credentials are not included.
+            JSON imports create or merge items. MyAnimeList XML imports fetch
+            details from the API (requires a connected account) and show a live
+            progress page while they run. Artwork files and account credentials
+            are not included.
           </p>
         </div>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
@@ -122,6 +126,52 @@ export default async function LibraryPage({
               Import JSON
             </button>
           </form>
+          <form
+            action="/api/library/import/mal"
+            method="post"
+            encType="multipart/form-data"
+            className="flex flex-col gap-2 sm:flex-row sm:items-end"
+          >
+            <label className="grid gap-1 text-sm">
+              <span className="font-medium">MyAnimeList XML</span>
+              <input
+                type="file"
+                name="file"
+                accept=".xml,text/xml,application/xml"
+                required
+                className="max-w-72 text-sm file:mr-3 file:rounded-md file:border file:bg-background file:px-3 file:py-1.5"
+              />
+            </label>
+            <button type="submit" className={buttonVariants()}>
+              Import MyAnimeList
+            </button>
+          </form>
+          {malFailures.length ? (
+            <div className="flex flex-col gap-1">
+              <form action="/api/library/import/mal/retry" method="post">
+                <button
+                  type="submit"
+                  className={buttonVariants({ variant: "outline" })}
+                >
+                  Retry MyAnimeList failures ({malFailures.length})
+                </button>
+              </form>
+              <details className="max-w-96 text-sm">
+                <summary className="cursor-pointer text-muted-foreground">
+                  Show failures
+                </summary>
+                <ul className="mt-2 space-y-2">
+                  {malFailures.map((failure) => (
+                    <li key={failure.externalId}>
+                      <span className="font-medium">{failure.title}</span> (ID{" "}
+                      {failure.externalId}):{" "}
+                      <span className="text-destructive">{failure.error}</span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            </div>
+          ) : null}
         </div>
       </div>
       <LibraryFilterBar

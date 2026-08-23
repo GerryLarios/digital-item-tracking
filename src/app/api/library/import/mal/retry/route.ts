@@ -22,7 +22,10 @@ export async function POST(request: Request) {
   }
 
   if (!getMalImportFailures().length) {
-    return NextResponse.redirect(new URL("/library", request.url), 303)
+    return NextResponse.redirect(
+      new URL("/settings/integrations/import/mal", request.url),
+      303,
+    )
   }
 
   return progressPageResponse(async (send) => {

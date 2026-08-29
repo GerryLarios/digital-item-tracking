@@ -10,7 +10,7 @@ export const runtime = "nodejs"
 const MAX_IMPORT_BYTES = 100 * 1024 * 1024
 
 function libraryRedirect(request: Request, values: Record<string, string | number>) {
-  const url = new URL("/library", request.url)
+  const url = new URL("/settings/integrations/import/json", request.url)
   for (const [key, value] of Object.entries(values)) {
     url.searchParams.set(key, String(value))
   }

@@ -30,7 +30,7 @@ export async function updateSteamSettingsAction(formData: FormData) {
   });
 
   if (!parsed.success) {
-    redirect("/settings/integrations?error=steam-config");
+    redirect("/settings/integrations/steam?error=steam-config");
   }
 
   configureSteamAccount({
@@ -40,7 +40,7 @@ export async function updateSteamSettingsAction(formData: FormData) {
     userId: getPrimaryUserId(),
   });
 
-  redirect("/settings/integrations?saved=steam");
+  redirect("/settings/integrations/steam?saved=steam");
 }
 
 export async function disconnectProviderAction(formData: FormData) {
@@ -52,7 +52,7 @@ export async function disconnectProviderAction(formData: FormData) {
   }
 
   disconnectProvider(provider as (typeof PROVIDERS)[number]);
-  redirect(`/settings/integrations?disconnected=${provider}`);
+  redirect(`/settings/integrations/${provider}?disconnected=${provider}`);
 }
 
 export async function runSyncAction(formData: FormData) {
@@ -62,11 +62,11 @@ export async function runSyncAction(formData: FormData) {
 
   if (provider === "all") {
     enqueueAllProviderSyncs("manual");
-    redirect("/settings/integrations?synced=queued-all");
+    redirect("/settings/integrations/sync?synced=queued-all");
   }
 
   if (typeof provider !== "string" || !PROVIDERS.includes(provider as never)) {
-    redirect("/settings/integrations?error=sync-provider");
+    redirect("/settings/integrations/sync?error=sync-provider");
   }
 
   try {
@@ -74,10 +74,10 @@ export async function runSyncAction(formData: FormData) {
   } catch (error) {
     const message =
       error instanceof Error ? encodeURIComponent(error.message) : "sync-error";
-    redirect(`/settings/integrations?error=${message}`);
+    redirect(`/settings/integrations/sync?error=${message}`);
   }
 
-  redirect(`/settings/integrations?synced=queued-${provider}`);
+  redirect(`/settings/integrations/sync?synced=queued-${provider}`);
 }
 
 export async function startDetailSyncAction(formData: FormData) {
@@ -98,10 +98,12 @@ export async function startDetailSyncAction(formData: FormData) {
       error instanceof Error
         ? encodeURIComponent(error.message)
         : "detail-sync-error";
-    redirect(`/settings/integrations?error=${message}`);
+    redirect(`/settings/integrations/details?error=${message}`);
   }
 
-  redirect(`/settings/integrations?details=${created ? "queued" : "active"}`);
+  redirect(
+    `/settings/integrations/details?details=${created ? "queued" : "active"}`,
+  );
 }
 
 export async function retryDetailSyncAction(formData: FormData) {
@@ -109,7 +111,7 @@ export async function retryDetailSyncAction(formData: FormData) {
 
   const jobId = formData.get("jobId");
   if (typeof jobId !== "string" || !jobId) {
-    redirect("/settings/integrations?error=Invalid%20detail%20sync%20job.");
+    redirect("/settings/integrations/details?error=Invalid%20detail%20sync%20job.");
   }
 
   try {
@@ -119,10 +121,10 @@ export async function retryDetailSyncAction(formData: FormData) {
       error instanceof Error
         ? encodeURIComponent(error.message)
         : "detail-sync-error";
-    redirect(`/settings/integrations?error=${message}`);
+    redirect(`/settings/integrations/details?error=${message}`);
   }
 
-  redirect("/settings/integrations?details=retrying");
+  redirect("/settings/integrations/details?details=retrying");
 }
 
 export async function retryDetailSyncItemAction(formData: FormData) {
@@ -130,7 +132,7 @@ export async function retryDetailSyncItemAction(formData: FormData) {
 
   const itemId = formData.get("itemId");
   if (typeof itemId !== "string" || !itemId) {
-    redirect("/settings/integrations?error=Invalid%20detail%20sync%20item.");
+    redirect("/settings/integrations/details?error=Invalid%20detail%20sync%20item.");
   }
 
   try {
@@ -140,10 +142,10 @@ export async function retryDetailSyncItemAction(formData: FormData) {
       error instanceof Error
         ? encodeURIComponent(error.message)
         : "detail-sync-error";
-    redirect(`/settings/integrations?error=${message}`);
+    redirect(`/settings/integrations/details?error=${message}`);
   }
 
-  redirect("/settings/integrations?details=retrying");
+  redirect("/settings/integrations/details?details=retrying");
 }
 
 export async function retryProviderRunItemAction(formData: FormData) {
@@ -157,7 +159,9 @@ export async function retryProviderRunItemAction(formData: FormData) {
     typeof itemId !== "string" ||
     !itemId
   ) {
-    redirect("/settings/integrations?error=Invalid%20sync%20item.");
+    redirect(
+      "/settings/integrations/sync?error=Invalid%20sync%20item.",
+    );
   }
 
   try {
@@ -167,15 +171,15 @@ export async function retryProviderRunItemAction(formData: FormData) {
       error instanceof Error
         ? encodeURIComponent(error.message)
         : "provider-sync-error";
-    redirect(`/settings/integrations?error=${message}`);
+    redirect(`/settings/integrations/sync?error=${message}`);
   }
 
-  redirect("/settings/integrations?synced=retrying");
+  redirect("/settings/integrations/sync?synced=retrying");
 }
 
 export async function clearSyncHistoryAction() {
   await requireSession();
 
   clearCompletedSyncRuns();
-  redirect("/settings/integrations?cleared=history");
+  redirect("/settings/integrations/history?cleared=history");
 }

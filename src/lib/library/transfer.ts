@@ -1,6 +1,6 @@
 import "@/lib/server-only"
 
-import { asc, eq } from "drizzle-orm"
+import { and, asc, eq } from "drizzle-orm"
 
 import { db } from "@/lib/db/client"
 import {
@@ -14,10 +14,41 @@ import { createId, parseJson, uniqueValues } from "@/lib/helpers"
 import {
   LIBRARY_ARCHIVE_FORMAT,
   LIBRARY_ARCHIVE_VERSION,
+  libraryArchiveSchema,
+  looseImportSchema,
   type LibraryArchive,
   type LibraryArchiveItem,
-  libraryArchiveSchema,
+  type LooseImportItem,
 } from "@/lib/library/transfer-schema"
+import { applyProviderMatch, findGameMatch } from "@/lib/sync/enrich"
+
+export type ImportResult = {
+  created: number
+  merged: number
+  artworkSkipped: number
+  enriched: number
+  unmatched: number
+  failedEnrichments: number
+}
+
+export async function importLibrary(input: unknown): Promise<ImportResult> {
+  const archiveResult = libraryArchiveSchema.safeParse(input)
+  if (archiveResult.success) {
+    return importArchive(archiveResult.data)
+  }
+
+  const looksLikeArchive =
+    typeof input === "object" && input !== null && "format" in input
+
+  const looseResult = looksLikeArchive
+    ? { success: false as const }
+    : looseImportSchema.safeParse(input)
+  if (looseResult.success) {
+    return importLooseList(looseResult.data)
+  }
+
+  throw archiveResult.error
+}
 
 function toIso(value: Date | null) {
   return value?.toISOString() ?? null
@@ -159,8 +190,7 @@ function nodeValues(item: LibraryArchiveItem) {
   }
 }
 
-export function importLibrary(input: unknown) {
-  const archive = libraryArchiveSchema.parse(input)
+function importArchive(archive: LibraryArchive): ImportResult {
   const existingNodes = db.select({ id: nodes.id }).from(nodes).all()
   const existingRefs = db.select({
     nodeId: externalRefs.nodeId,
@@ -359,5 +389,104 @@ export function importLibrary(input: unknown) {
     created,
     merged,
     artworkSkipped: archive.items.reduce((count, item) => count + item.images.length, 0),
+    enriched: 0,
+    unmatched: 0,
+    failedEnrichments: 0,
+  }
+}
+
+async function importLooseList(items: LooseImportItem[]): Promise<ImportResult> {
+  const createdIds: string[] = []
+
+  db.transaction((tx) => {
+    for (const item of items) {
+      const id = createId()
+      const now = new Date()
+
+      tx.insert(nodes)
+        .values({
+          id,
+          mediaType: item.mediaType,
+          displayName: item.displayName,
+          description: item.description ?? null,
+          status: item.status ?? "NOT_STARTED",
+          releaseYear: item.releaseYear ?? null,
+          nsfw: item.nsfw ?? false,
+          hidden: item.hidden ?? false,
+          notes: item.notes ?? null,
+          overrideFields: JSON.stringify([]),
+          createdAt: now,
+          updatedAt: now,
+        })
+        .run()
+
+      const steamAppId = typeof item.steamAppId === "string"
+        ? item.steamAppId.trim()
+        : item.steamAppId != null
+          ? String(item.steamAppId)
+          : ""
+      if (steamAppId && /^\d+$/.test(steamAppId)) {
+        tx.insert(externalRefs)
+          .values({
+            id: createId(),
+            nodeId: id,
+            provider: "steam",
+            externalId: steamAppId,
+            mediaType: item.mediaType,
+            listMemberships: JSON.stringify(["manual"]),
+            isActive: true,
+            sourceData: JSON.stringify({ importedFromList: true }),
+            createdAt: now,
+            updatedAt: now,
+          })
+          .run()
+      }
+
+      createdIds.push(id)
+    }
+  })
+
+  let enriched = 0
+  let unmatched = 0
+  let failedEnrichments = 0
+
+  for (const nodeId of createdIds) {
+    const node = db.query.nodes.findFirst({
+      with: { images: true },
+      where: eq(nodes.id, nodeId),
+    }).sync()
+    if (!node || node.mediaType !== "GAME") continue
+    if (node.description && node.images.length > 0) continue
+
+    try {
+      const existingRef = db.query.externalRefs.findFirst({
+        where: and(eq(externalRefs.nodeId, nodeId), eq(externalRefs.isActive, true)),
+      }).sync()
+      const match = existingRef
+        ? { provider: existingRef.provider as "steam" | "rawg", externalId: existingRef.externalId }
+        : await findGameMatch(node.displayName)
+
+      if (!match) {
+        unmatched += 1
+        continue
+      }
+
+      await applyProviderMatch(nodeId, match)
+      enriched += 1
+    } catch (error) {
+      failedEnrichments += 1
+      console.warn(
+        `Provider enrichment failed for "${node.displayName}": ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  }
+
+  return {
+    created: createdIds.length,
+    merged: 0,
+    artworkSkipped: 0,
+    enriched,
+    unmatched,
+    failedEnrichments,
   }
 }

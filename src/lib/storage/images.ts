@@ -7,6 +7,7 @@ import { and, eq, inArray } from "drizzle-orm"
 import sharp from "sharp"
 
 import { createId } from "@/lib/helpers"
+import type { Provider } from "@/lib/constants"
 import { checksumBuffer } from "@/lib/crypto"
 import { ensureDataDirectories, getDataPaths, resolveManagedPath, toManagedRelativePath } from "@/lib/data-dir"
 import { db } from "@/lib/db/client"
@@ -151,7 +152,7 @@ async function persistImageSet({
   thumbWidth: number
   thumbHeight: number
   sourceUrl?: string | null
-  sourceProvider?: "steam" | "mal" | null
+  sourceProvider?: Provider | null
   managed: boolean
 }) {
   ensureDataDirectories()
@@ -252,29 +253,11 @@ export async function removePrimaryImageSet(nodeId: string) {
 
 export async function syncManagedMainImage(
   nodeId: string,
-  provider: "steam" | "mal",
+  provider: Provider,
   sourceUrl: string,
 ) {
-  const response = await fetchWithTimeout(sourceUrl, {
-    headers: {
-      Accept: "image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8,*/*;q=0.1",
-    },
-  })
-
-  if (!response.ok) {
-    throw new Error(`Failed to download artwork (${response.status}).`)
-  }
-
-  const contentLength = Number.parseInt(response.headers.get("content-length") ?? "0", 10)
-  if (contentLength && contentLength > getEnv().remoteImageMaxBytes) {
-    throw new Error("Remote artwork exceeded the configured size limit.")
-  }
-
-  const buffer = Buffer.from(await response.arrayBuffer())
-  if (buffer.byteLength > getEnv().remoteImageMaxBytes) {
-    throw new Error("Remote artwork exceeded the configured size limit.")
-  }
-
+  const buffer = await downloadRemoteImage(sourceUrl)
+  if (!buffer) return undefined
   const normalized = await normalizeImageBuffer(buffer)
 
   return persistImageSet({
@@ -293,6 +276,126 @@ export async function syncManagedMainImage(
   })
 }
 
+async function downloadRemoteImage(sourceUrl: string): Promise<Buffer | null> {
+  const response = await fetchWithTimeout(sourceUrl, {
+    headers: {
+      Accept: "image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8,*/*;q=0.1",
+    },
+  })
+
+  if (!response.ok) {
+    throw new Error(`Failed to download artwork (${response.status}).`)
+  }
+
+  const maxBytes = getEnv().remoteImageMaxBytes
+  const contentLength = Number.parseInt(response.headers.get("content-length") ?? "0", 10)
+  if (contentLength && contentLength > maxBytes) {
+    console.warn("Skipping remote artwork over the configured size limit.", {
+      sourceUrl,
+      bytes: contentLength,
+      maxBytes,
+    })
+    return null
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer())
+  if (buffer.byteLength > maxBytes) {
+    console.warn("Skipping remote artwork over the configured size limit.", {
+      sourceUrl,
+      bytes: buffer.byteLength,
+      maxBytes,
+    })
+    return null
+  }
+
+  return buffer
+}
+
+export async function syncManagedGalleryImages(
+  nodeId: string,
+  provider: Provider,
+  items: Array<{ sourceUrl: string; width?: number; height?: number }>,
+) {
+  const existing = db.query.images.findMany({
+    where: and(
+      eq(images.nodeId, nodeId),
+      eq(images.role, "gallery"),
+      eq(images.sourceProvider, provider),
+    ),
+  }).sync()
+  const orphanCandidates = removeDatabaseImageRecords(existing.map((image) => image.id))
+
+  const rows: typeof images.$inferInsert[] = []
+  const seenUrls = new Set<string>()
+  const now = new Date()
+
+  for (const [sortOrder, item] of items.entries()) {
+    if (seenUrls.has(item.sourceUrl)) continue
+    seenUrls.add(item.sourceUrl)
+
+    const buffer = await downloadRemoteImage(item.sourceUrl)
+    if (!buffer) continue
+    const normalized = await normalizeImageBuffer(buffer)
+    const originalChecksum = checksumBuffer(normalized.original)
+    const thumbnailChecksum = checksumBuffer(normalized.thumbnail)
+    const originalRelativePath = path.join(
+      "media",
+      "originals",
+      `${originalChecksum}.${getExtensionForFormat(normalized.format)}`,
+    )
+    const thumbnailRelativePath = path.join("media", "thumbnails", `${thumbnailChecksum}.webp`)
+
+    writeFileAtomically(resolveManagedPath(originalRelativePath), normalized.original)
+    writeFileAtomically(resolveManagedPath(thumbnailRelativePath), normalized.thumbnail)
+
+    rows.push(
+      {
+        id: createId(),
+        assetKey: createId(),
+        nodeId,
+        role: "gallery",
+        path: originalRelativePath,
+        mimeType: normalized.mimeType,
+        width: item.width ?? normalized.width,
+        height: item.height ?? normalized.height,
+        byteSize: normalized.original.byteLength,
+        checksum: originalChecksum,
+        sourceUrl: item.sourceUrl,
+        sourceProvider: provider,
+        sortOrder,
+        managed: true,
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: createId(),
+        assetKey: createId(),
+        nodeId,
+        role: "gallery",
+        path: thumbnailRelativePath,
+        mimeType: "image/webp",
+        width: normalized.thumbWidth,
+        height: normalized.thumbHeight,
+        byteSize: normalized.thumbnail.byteLength,
+        checksum: thumbnailChecksum,
+        sourceUrl: item.sourceUrl,
+        sourceProvider: provider,
+        sortOrder,
+        managed: true,
+        createdAt: now,
+        updatedAt: now,
+      },
+    )
+  }
+
+  if (rows.length) {
+    db.insert(images).values(rows).run()
+  }
+
+  cleanupOrphanedPaths(orphanCandidates)
+  return rows.length / 2
+}
+
 export function getImageById(imageId: string) {
   return db.query.images.findFirst({ where: eq(images.id, imageId) }).sync()
 }
@@ -304,6 +407,12 @@ export function readImageFile(relativePath: string) {
 export function deleteAllNodeImages(nodeId: string) {
   const existing = db.query.images.findMany({ where: eq(images.nodeId, nodeId) }).sync()
   const paths = removeDatabaseImageRecords(existing.map((image) => image.id))
+  cleanupOrphanedPaths(paths)
+}
+
+export function deleteNodeImages(imageIds: string[]) {
+  if (!imageIds.length) return
+  const paths = removeDatabaseImageRecords(imageIds)
   cleanupOrphanedPaths(paths)
 }
 

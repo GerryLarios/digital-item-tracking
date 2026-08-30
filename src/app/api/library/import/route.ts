@@ -43,12 +43,17 @@ export async function POST(request: Request) {
     }
 
     const parsed = JSON.parse(await file.text()) as unknown
-    const result = importLibrary(parsed)
+    const result = await importLibrary(parsed)
 
     return libraryRedirect(request, {
       importCreated: result.created,
       importMerged: result.merged,
       artworkSkipped: result.artworkSkipped,
+      importEnriched: result.enriched,
+      importUnmatched: result.unmatched,
+      ...(result.failedEnrichments
+        ? { importEnrichFailed: result.failedEnrichments }
+        : {}),
     })
   } catch (error) {
     const isIdentityConflict =
@@ -61,7 +66,7 @@ export async function POST(request: Request) {
         ? "The selected file is not valid JSON."
         : isIdentityConflict
           ? error.message
-          : "The selected file is not a valid library export."
+          : "The selected file is not a valid library export or item list."
     return libraryRedirect(request, { importError: message })
   }
 }

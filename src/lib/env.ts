@@ -16,6 +16,7 @@ const baseSchema = z.object({
   MAL_CLIENT_SECRET: z.string().optional(),
   MAL_REDIRECT_URI: z.string().optional(),
   STEAM_API_KEY: z.string().optional(),
+  RAWG_API_KEY: z.string().optional(),
   IMAGE_MAX_UPLOAD_BYTES: z.coerce
     .number()
     .int()
@@ -25,7 +26,7 @@ const baseSchema = z.object({
     .number()
     .int()
     .min(1024)
-    .default(10 * 1024 * 1024),
+    .default(25 * 1024 * 1024),
   REMOTE_HTTP_TIMEOUT_MS: z.coerce.number().int().min(1000).default(15_000),
   NSFW_GENRES: z.string().default(""),
 });
@@ -85,6 +86,7 @@ function buildEnv() {
       parsed.MAL_REDIRECT_URI?.trim() ||
       `${appOrigin}/api/integrations/mal/callback`,
     steamApiKey: parsed.STEAM_API_KEY?.trim() || null,
+    rawgApiKey: parsed.RAWG_API_KEY?.trim() || null,
     imageMaxUploadBytes: parsed.IMAGE_MAX_UPLOAD_BYTES,
     remoteImageMaxBytes: parsed.REMOTE_IMAGE_MAX_BYTES,
     remoteHttpTimeoutMs: parsed.REMOTE_HTTP_TIMEOUT_MS,

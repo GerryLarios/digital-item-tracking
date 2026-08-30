@@ -1,6 +1,6 @@
 import "@/lib/server-only"
 
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm"
 
 import {
   DEFAULT_LIBRARY_SORT,
@@ -14,13 +14,19 @@ import { createId, parseJson, uniqueValues } from "@/lib/helpers"
 import { db } from "@/lib/db/client"
 import {
   externalRefs,
+  images,
   libraryNodeSummary,
   nodeAttributes,
   nodeLinks,
   nodes,
   storageLocations,
 } from "@/lib/db/schema"
-import { deleteAllNodeImages, removePrimaryImageSet, setManualMainImage } from "@/lib/storage/images"
+import {
+  deleteAllNodeImages,
+  deleteNodeImages,
+  removePrimaryImageSet,
+  setManualMainImage,
+} from "@/lib/storage/images"
 import type { NodeEditorInput, NodeFormInput } from "@/lib/validation"
 
 export type LibraryFilters = {
@@ -393,6 +399,101 @@ export async function saveManualNode(input: NodeFormInput, file: File | null) {
 export function deleteNode(nodeId: string) {
   deleteAllNodeImages(nodeId)
   db.delete(nodes).where(eq(nodes.id, nodeId)).run()
+}
+
+export function mergeNodes(targetId: string, sourceId: string) {
+  if (targetId === sourceId) {
+    throw new Error("An item cannot be merged into itself.")
+  }
+
+  const target = db.query.nodes.findFirst({ where: eq(nodes.id, targetId) }).sync()
+  const source = db.query.nodes.findFirst({ where: eq(nodes.id, sourceId) }).sync()
+  if (!target || !source) {
+    throw new Error("One of the items does not exist.")
+  }
+  if (target.mediaType !== source.mediaType) {
+    throw new Error("Only items of the same media type can be merged.")
+  }
+
+  const now = new Date()
+  const droppedImageIds: string[] = []
+
+  db.transaction((tx) => {
+    const sourceRefs = tx.select().from(externalRefs).where(eq(externalRefs.nodeId, sourceId)).all()
+    for (const ref of sourceRefs) {
+      const duplicate = tx.select().from(externalRefs)
+        .where(and(
+          eq(externalRefs.provider, ref.provider),
+          eq(externalRefs.externalId, ref.externalId),
+          ne(externalRefs.nodeId, sourceId),
+        ))
+        .all()
+      if (duplicate.length) {
+        tx.delete(externalRefs).where(eq(externalRefs.id, ref.id)).run()
+      } else {
+        tx.update(externalRefs).set({ nodeId: targetId, updatedAt: now }).where(eq(externalRefs.id, ref.id)).run()
+      }
+    }
+
+    const nodeUpdates: Partial<typeof nodes.$inferInsert> = { updatedAt: now }
+    if (!target.description && source.description) nodeUpdates.description = source.description
+    if (target.releaseYear == null && source.releaseYear != null) nodeUpdates.releaseYear = source.releaseYear
+    if (!target.notes && source.notes) nodeUpdates.notes = source.notes
+    if (!target.nsfw && source.nsfw) nodeUpdates.nsfw = true
+    if (target.status === "NOT_STARTED" && source.status !== "NOT_STARTED") nodeUpdates.status = source.status
+    tx.update(nodes).set(nodeUpdates).where(eq(nodes.id, targetId)).run()
+
+    const targetAttributes = tx.select().from(nodeAttributes).where(eq(nodeAttributes.nodeId, targetId)).all()
+    const targetAttributeKeys = new Set(targetAttributes.map((a) => `${a.key}\u0000${a.value}`))
+    const sourceAttributes = tx.select().from(nodeAttributes).where(eq(nodeAttributes.nodeId, sourceId)).all()
+    for (const attribute of sourceAttributes) {
+      if (targetAttributeKeys.has(`${attribute.key}\u0000${attribute.value}`)) {
+        tx.delete(nodeAttributes).where(eq(nodeAttributes.id, attribute.id)).run()
+      } else {
+        tx.update(nodeAttributes).set({ nodeId: targetId, updatedAt: now }).where(eq(nodeAttributes.id, attribute.id)).run()
+      }
+    }
+
+    tx.update(storageLocations).set({ nodeId: targetId, updatedAt: now }).where(eq(storageLocations.nodeId, sourceId)).run()
+    tx.update(nodeLinks).set({ nodeId: targetId, updatedAt: now }).where(eq(nodeLinks.nodeId, sourceId)).run()
+
+    const sourceImages = tx.select().from(images).where(eq(images.nodeId, sourceId)).all()
+    const targetImages = tx.select().from(images).where(eq(images.nodeId, targetId)).all()
+    const targetPaths = new Set(targetImages.map((image) => image.path))
+    const targetHasMain = targetImages.some((image) => image.role === "main")
+
+    const dropThumbnailSiblings = new Set<string>()
+    for (const image of sourceImages) {
+      if (image.role !== "main") continue
+      if (targetHasMain || targetPaths.has(image.path)) {
+        dropThumbnailSiblings.add(image.assetKey)
+      }
+    }
+
+    for (const image of sourceImages) {
+      if (targetPaths.has(image.path)) {
+        tx.delete(images).where(eq(images.id, image.id)).run()
+        droppedImageIds.push(image.id)
+        continue
+      }
+      if (image.role === "main" && targetHasMain) {
+        tx.update(images).set({ nodeId: targetId, role: "gallery", updatedAt: now }).where(eq(images.id, image.id)).run()
+        continue
+      }
+      if (image.role === "thumbnail" && dropThumbnailSiblings.has(image.assetKey)) {
+        tx.delete(images).where(eq(images.id, image.id)).run()
+        droppedImageIds.push(image.id)
+        continue
+      }
+      tx.update(images).set({ nodeId: targetId, updatedAt: now }).where(eq(images.id, image.id)).run()
+    }
+
+    tx.delete(nodes).where(eq(nodes.id, sourceId)).run()
+  })
+
+  deleteNodeImages(droppedImageIds)
+
+  return targetId
 }
 
 export function parseOverrideFields(rawOverrideFields: string | string[]) {

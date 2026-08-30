@@ -40,6 +40,11 @@ const LINK_CARDS = [
     description: "SteamID64, wishlist link, syncs, and disconnect.",
   },
   {
+    href: "/settings/integrations/rawg",
+    title: "RAWG",
+    description: "Game metadata and artwork for the JSON importer.",
+  },
+  {
     href: "/settings/integrations/mal",
     title: "MyAnimeList",
     description: "OAuth connection, syncs, profile, and disconnect.",
@@ -141,6 +146,20 @@ export default async function IntegrationsPage() {
               )}
               <Link
                 href="/settings/integrations/mal"
+                className="ml-auto text-muted-foreground underline-offset-4 hover:underline"
+              >
+                Manage
+              </Link>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="w-24 font-medium">RAWG</span>
+              <Badge
+                variant={env.rawgApiKey ? "secondary" : "destructive"}
+              >
+                API key {env.rawgApiKey ? "configured" : "missing"}
+              </Badge>
+              <Link
+                href="/settings/integrations/rawg"
                 className="ml-auto text-muted-foreground underline-offset-4 hover:underline"
               >
                 Manage

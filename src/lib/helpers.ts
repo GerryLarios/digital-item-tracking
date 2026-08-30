@@ -24,6 +24,10 @@ export function parseBoolean(value: FormDataEntryValue | null | undefined) {
   return value === "on" || value === "true" || value === "1"
 }
 
+export function normalizeTitle(value: string) {
+  return value.replace(/\s+/gu, " ").trim().toLowerCase()
+}
+
 export function uniqueValues<T>(values: T[]) {
   return [...new Set(values)]
 }

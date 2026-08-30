@@ -3,6 +3,7 @@ import "@/lib/server-only";
 import { z } from "zod";
 
 import { getEnv } from "@/lib/env";
+import { normalizeTitle } from "@/lib/helpers";
 import { fetchJson } from "@/lib/http";
 import type { RemoteAttribute, RemoteCatalogItem } from "@/lib/providers/types";
 import { ProviderParseError } from "@/lib/providers/types";
@@ -14,6 +15,18 @@ const rawgSearchSchema = z.object({
         id: z.number(),
         slug: z.string(),
         name: z.string(),
+      }),
+    )
+    .default([]),
+});
+
+const rawgScreenshotsSchema = z.object({
+  results: z
+    .array(
+      z.object({
+        image: z.string().url(),
+        width: z.number().int().nonnegative().optional(),
+        height: z.number().int().nonnegative().optional(),
       }),
     )
     .default([]),
@@ -65,11 +78,11 @@ export function pickExactRawgMatch(
   title: string,
   results: Array<{ id: number; name: string }>,
 ) {
-  const normalized = title.trim().toLowerCase();
+  const normalized = normalizeTitle(title);
   if (!normalized) return null;
 
   return (
-    results.find((result) => result.name.trim().toLowerCase() === normalized) ??
+    results.find((result) => normalizeTitle(result.name) === normalized) ??
     null
   );
 }
@@ -77,7 +90,7 @@ export function pickExactRawgMatch(
 export async function searchRawgGameByTitle(title: string) {
   requireApiKey();
   const url = authenticatedUrl("/games", {
-    search: title,
+    search: normalizeTitle(title),
     search_exact: "true",
     page_size: "20",
   });
@@ -92,6 +105,27 @@ export async function searchRawgGameByTitle(title: string) {
       name: result.name,
     })),
   );
+}
+
+export async function fetchRawgGameScreenshots(
+  externalId: string,
+): Promise<Array<{ image: string; width: number; height: number }>> {
+  requireApiKey();
+  const url = authenticatedUrl(
+    `/games/${encodeURIComponent(externalId)}/screenshots`,
+    { page_size: "12" },
+  );
+
+  const payload = await fetchJson<unknown>(url);
+  const response = rawgScreenshotsSchema.parse(payload);
+
+  return response.results
+    .filter((result) => result.image && !result.image.includes("placeholder"))
+    .map((result) => ({
+      image: result.image,
+      width: result.width ?? 0,
+      height: result.height ?? 0,
+    }));
 }
 
 function stripHtml(value: string | undefined | null) {

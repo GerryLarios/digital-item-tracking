@@ -3,6 +3,7 @@ import "@/lib/server-only";
 import { z } from "zod";
 
 import { getEnv } from "@/lib/env";
+import { normalizeTitle } from "@/lib/helpers";
 import { fetchJson, fetchWithTimeout } from "@/lib/http";
 import type { ParsedSyncAccount } from "@/lib/integrations/service";
 import type {
@@ -363,17 +364,18 @@ const steamStoreSearchSchema = z.object({
 });
 
 export async function searchSteamAppByTitle(title: string) {
+  const normalized = normalizeTitle(title);
+  if (!normalized) return null;
+
   const url = new URL("https://store.steampowered.com/api/storesearch");
-  url.searchParams.set("term", title);
+  url.searchParams.set("term", normalized);
   url.searchParams.set("l", "english");
   url.searchParams.set("cc", "US");
 
   const payload = steamStoreSearchSchema.parse(await fetchJson<unknown>(url));
-  const normalized = title.trim().toLowerCase();
-  if (!normalized) return null;
 
   const match = payload.items.find(
-    (item) => item.type === "APP" && item.name.trim().toLowerCase() === normalized,
+    (item) => item.type === "APP" && normalizeTitle(item.name) === normalized,
   );
 
   return match ? String(match.id) : null;

@@ -26,7 +26,7 @@ const baseSchema = z.object({
     .number()
     .int()
     .min(1024)
-    .default(10 * 1024 * 1024),
+    .default(25 * 1024 * 1024),
   REMOTE_HTTP_TIMEOUT_MS: z.coerce.number().int().min(1000).default(15_000),
   NSFW_GENRES: z.string().default(""),
 });

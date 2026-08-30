@@ -25,7 +25,10 @@ export function NodeCard({
   const imageId = item.thumbnailImageId ?? item.mainImageId
 
   return (
-    <article className="group flex gap-5 py-5 first:pt-0 last:pb-0 sm:gap-7">
+    <Link
+      href={`/library/${item.id}`}
+      className="group flex gap-5 py-5 first:pt-0 last:pb-0 sm:gap-7"
+    >
       <div className="relative aspect-[4/3] w-40 shrink-0 overflow-hidden rounded-xl bg-muted">
         {imageId ? (
           <img
@@ -71,14 +74,11 @@ export function NodeCard({
               </Badge>
             ))}
           </div>
-          <Link
-            href={`/library/${item.id}`}
-            className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-primary"
-          >
+          <span className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground transition-colors group-hover:text-primary">
             View item <ArrowUpRight className="size-3.5" aria-hidden="true" />
-          </Link>
+          </span>
         </div>
       </div>
-    </article>
+    </Link>
   )
 }

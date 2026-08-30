@@ -5,6 +5,7 @@ import { notFound } from "next/navigation";
 
 import { findProviderMatchAction, syncNodeDetailsAction } from "@/app/actions/library";
 import { DeleteNodeButton } from "@/components/library/delete-node-button";
+import { MergeNodeForm } from "@/components/library/merge-node-form";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import {
@@ -71,6 +72,9 @@ export default async function NodeDetailPage({
   }
 
   const mainImage = node.images.find((image) => image.role === "main");
+  const galleryImages = node.images.filter(
+    (image) => image.role === "gallery" && image.path.includes("/originals/"),
+  );
   const groupedAttributes = groupAttributes(node.attributes);
   const syncNotice =
     typeof query.sync === "string"
@@ -80,6 +84,7 @@ export default async function NodeDetailPage({
         : null;
   const hasSyncError = typeof query.syncError === "string";
   const canSyncDetails = node.externalRefs.some((ref) => ref.isActive);
+  const rawgRef = node.externalRefs.find((ref) => ref.provider === "rawg");
 
   return (
     <div className="space-y-6">
@@ -162,6 +167,21 @@ export default async function NodeDetailPage({
                 Add artwork by editing this item.
               </div>
             )}
+            {galleryImages.length ? (
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Screenshots</p>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  {galleryImages.map((image) => (
+                    <img
+                      key={image.id}
+                      src={`/media/${image.id}`}
+                      alt={`${node.displayName} screenshot`}
+                      className="aspect-video w-full rounded-lg object-cover"
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : null}
             <div className="grid gap-2 text-sm text-muted-foreground">
               <div>Updated {formatDate(node.updatedAt)}</div>
               <div>Created {formatDate(node.createdAt)}</div>
@@ -199,6 +219,22 @@ export default async function NodeDetailPage({
                 )}
               </div>
               <Separator />
+              {rawgRef ? (
+                <div className="rounded-lg border p-3">
+                  <p className="font-medium">RAWG ID</p>
+                  <p className="text-muted-foreground">
+                    {rawgRef.externalId}
+                    {rawgRef.externalUrl ? (
+                      <Link
+                        href={rawgRef.externalUrl}
+                        className="ml-2 text-primary underline-offset-4 hover:underline"
+                      >
+                        Open on RAWG
+                      </Link>
+                    ) : null}
+                  </p>
+                </div>
+              ) : null}
               <div className="grid gap-3 md:grid-cols-2">
                 {node.externalRefs.length ? (
                   node.externalRefs.map((ref) => {
@@ -296,6 +332,20 @@ export default async function NodeDetailPage({
                   No manual links recorded.
                 </p>
               )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Merge duplicate</CardTitle>
+              <CardDescription>
+                If this item exists a second time under another provider, merge
+                them so one entry keeps every reference, attribute, and piece
+                of artwork.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <MergeNodeForm targetId={node.id} title={node.displayName} />
             </CardContent>
           </Card>
         </div>

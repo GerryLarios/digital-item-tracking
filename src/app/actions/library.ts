@@ -4,7 +4,7 @@ import { redirect } from "next/navigation"
 
 import { requireSession } from "@/lib/auth"
 import { PROVIDER_LABELS } from "@/lib/constants"
-import { deleteNode, saveManualNode } from "@/lib/library/service"
+import { deleteNode, mergeNodes, saveManualNode } from "@/lib/library/service"
 import { enrichGameNode } from "@/lib/sync/enrich"
 import { syncNodeDetails } from "@/lib/sync/item-details"
 import {
@@ -82,6 +82,42 @@ export async function deleteNodeAction(formData: FormData) {
 
   deleteNode(nodeId)
   redirect("/library?deleted=1")
+}
+
+const NODE_ID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/
+
+export async function mergeNodesAction(formData: FormData) {
+  await requireSession()
+
+  const targetId = formData.get("targetId")
+  if (typeof targetId !== "string" || !targetId) {
+    redirect("/library")
+  }
+
+  const rawSource = formData.get("source")
+  const confirmed = formData.get("confirmed")
+  if (typeof rawSource !== "string" || !rawSource.trim()) {
+    redirect(`/library/${targetId}?syncError=${encodeURIComponent("Paste the other item's URL or ID to merge.")}`)
+  }
+  if (confirmed !== "true") {
+    redirect(`/library/${targetId}?syncError=${encodeURIComponent("Confirm the merge to continue.")}`)
+  }
+
+  const sourceMatch = rawSource.match(NODE_ID_PATTERN)
+  if (!sourceMatch) {
+    redirect(`/library/${targetId}?syncError=${encodeURIComponent("Could not find an item ID in that value.")}`)
+  }
+
+  let destination: string
+  try {
+    mergeNodes(targetId, sourceMatch[0])
+    destination = `/library/${targetId}?sync=${encodeURIComponent("Items merged; provider references combined.")}`
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to merge these items."
+    destination = `/library/${targetId}?syncError=${encodeURIComponent(message)}`
+  }
+
+  redirect(destination)
 }
 
 export async function syncNodeDetailsAction(formData: FormData) {

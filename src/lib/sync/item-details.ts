@@ -8,9 +8,13 @@ import { externalRefs, nodes } from "@/lib/db/schema"
 import { parseJson } from "@/lib/helpers"
 import { getSyncAccount } from "@/lib/integrations/service"
 import { fetchMalItemDetails } from "@/lib/providers/mal"
-import { fetchRawgItemDetails } from "@/lib/providers/rawg"
+import {
+  fetchRawgGameScreenshots,
+  fetchRawgItemDetails,
+} from "@/lib/providers/rawg"
 import { fetchSteamItemDetails } from "@/lib/providers/steam"
 import { ProviderParseError, type RemoteCatalogItem } from "@/lib/providers/types"
+import { syncManagedGalleryImages } from "@/lib/storage/images"
 import { reconcileRemoteItem } from "@/lib/sync/service"
 
 export async function fetchDetails(
@@ -60,6 +64,24 @@ export async function syncNodeDetails(nodeId: string, provider?: Provider) {
       const memberships = parseJson<string[]>(ref.listMemberships, [])
       const item = await fetchDetails(ref.provider, ref.externalId, memberships)
       await reconcileRemoteItem(item, [])
+      if (ref.provider === "rawg") {
+        try {
+          const screenshots = await fetchRawgGameScreenshots(ref.externalId)
+          await syncManagedGalleryImages(
+            nodeId,
+            "rawg",
+            screenshots.map((shot) => ({
+              sourceUrl: shot.image,
+              width: shot.width,
+              height: shot.height,
+            })),
+          )
+        } catch (error) {
+          failures.push(
+            `RAWG gallery: ${error instanceof Error ? error.message : String(error)}`,
+          )
+        }
+      }
       updated.push(ref.provider)
     } catch (error) {
       failures.push(
